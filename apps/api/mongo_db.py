@@ -46,6 +46,10 @@ def init_mongo() -> None:
     collection("billing_events").create_index([("business_id", ASCENDING), ("created_at", DESCENDING)])
     collection("billing_events").create_index("provider_event_id", unique=True, sparse=True)
     collection("billing_settings").create_index("key", unique=True)
+    collection("manual_payment_settings").create_index("key", unique=True)
+    collection("manual_payment_proofs").create_index("id", unique=True)
+    collection("manual_payment_proofs").create_index([("status", ASCENDING), ("created_at", DESCENDING)])
+    collection("manual_payment_proofs").create_index([("business_id", ASCENDING), ("created_at", DESCENDING)])
 
 
 def clean_doc(doc: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
