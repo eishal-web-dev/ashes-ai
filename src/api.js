@@ -137,6 +137,11 @@ export async function setAdminBusinessStatus(businessId, action) {
 }
 export async function getAdminJobs() { return apiFetch('/api/admin/jobs', {}, true); }
 export async function getAdminBilling() { return apiFetch('/api/admin/billing', {}, true); }
+export async function updateAdminBillingSettings(values) {
+  return apiFetch('/api/admin/billing/settings', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
+  }, true);
+}
 
 export function absoluteApiUrl(path) {
   if (!path) return null;
