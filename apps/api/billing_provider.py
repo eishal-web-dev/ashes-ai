@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from apps.api.billing_settings import checkout_price
 from apps.api.mongo_db import clean_doc, collection
 from apps.api.subscriptions import PLANS, subscription_snapshot
 
@@ -15,6 +16,16 @@ def _now_iso() -> str:
 
 def billing_provider() -> str:
     return os.getenv("ASHES_BILLING_PROVIDER", "manual").strip().lower() or "manual"
+
+
+def _stripe_client():
+    import stripe
+
+    secret = os.getenv("STRIPE_SECRET_KEY", "").strip()
+    if not secret:
+        raise ValueError("STRIPE_SECRET_KEY is not configured")
+    stripe.api_key = secret
+    return stripe
 
 
 def create_checkout_intent(business_id: str, plan_key: str, success_url: str, cancel_url: str) -> dict[str, Any]:
@@ -39,14 +50,38 @@ def create_checkout_intent(business_id: str, plan_key: str, success_url: str, ca
     }
 
     if provider == "manual":
-        # Development mode: no card is charged. The frontend gets an explicit
-        # pending checkout state instead of silently upgrading the business.
         doc["checkout_url"] = None
     elif provider == "stripe":
-        # Stripe integration is intentionally isolated here. Once STRIPE_* env
-        # values are configured, this function can create a Checkout Session
-        # without changing routes, dashboard code, or subscription storage.
-        raise ValueError("Stripe provider is configured but checkout is not enabled yet")
+        stripe = _stripe_client()
+        currency, amount_minor = checkout_price(key)
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            success_url=success_url,
+            cancel_url=cancel_url,
+            line_items=[{
+                "price_data": {
+                    "currency": currency,
+                    "unit_amount": amount_minor,
+                    "recurring": {"interval": "month"},
+                    "product_data": {"name": f"Ashes AI {PLANS[key]['name']}"},
+                },
+                "quantity": 1,
+            }],
+            metadata={
+                "ashes_intent_id": intent_id,
+                "ashes_business_id": business_id,
+                "ashes_plan": key,
+            },
+            subscription_data={
+                "metadata": {
+                    "ashes_intent_id": intent_id,
+                    "ashes_business_id": business_id,
+                    "ashes_plan": key,
+                }
+            },
+        )
+        doc["provider_session_id"] = session.id
+        doc["checkout_url"] = session.url
     else:
         raise ValueError(f"Unsupported billing provider: {provider}")
 
@@ -66,15 +101,20 @@ def list_checkout_intents(business_id: str, limit: int = 20) -> list[dict[str, A
     return [clean_doc(doc) for doc in docs]
 
 
-def complete_checkout_intent(intent_id: str, provider_session_id: Optional[str] = None) -> dict[str, Any]:
+def complete_checkout_intent(intent_id: str, provider_session_id: Optional[str] = None, subscription_id: Optional[str] = None, customer_id: Optional[str] = None) -> dict[str, Any]:
     intent = get_checkout_intent(intent_id)
     if not intent:
         raise ValueError("Checkout intent not found")
+    if intent.get("status") == "completed":
+        return subscription_snapshot(intent["business_id"])
+
     collection("billing_checkout_intents").update_one(
         {"id": intent_id},
         {"$set": {
             "status": "completed",
             "provider_session_id": provider_session_id or intent.get("provider_session_id"),
+            "provider_subscription_id": subscription_id,
+            "provider_customer_id": customer_id,
             "updated_at": _now_iso(),
         }},
     )
@@ -84,13 +124,15 @@ def complete_checkout_intent(intent_id: str, provider_session_id: Optional[str] 
             "plan": intent["plan"],
             "subscription_status": "active",
             "billing_provider": intent.get("provider") or billing_provider(),
+            "billing_subscription_id": subscription_id,
+            "billing_customer_id": customer_id,
             "billing_updated_at": _now_iso(),
         }},
     )
     record_subscription_event(
         intent["business_id"],
         "checkout.completed",
-        {"intent_id": intent_id, "plan": intent["plan"], "provider_session_id": provider_session_id},
+        {"intent_id": intent_id, "plan": intent["plan"], "provider_session_id": provider_session_id, "subscription_id": subscription_id, "customer_id": customer_id},
     )
     return subscription_snapshot(intent["business_id"])
 
@@ -126,3 +168,54 @@ def record_subscription_event(business_id: str, event_type: str, payload: Option
 def subscription_history(business_id: str, limit: int = 50) -> list[dict[str, Any]]:
     docs = collection("billing_events").find({"business_id": business_id}).sort("created_at", -1).limit(limit)
     return [clean_doc(doc) for doc in docs]
+
+
+def handle_stripe_webhook(payload: bytes, signature: str) -> dict[str, Any]:
+    stripe = _stripe_client()
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+    if not webhook_secret:
+        raise ValueError("STRIPE_WEBHOOK_SECRET is not configured")
+
+    event = stripe.Webhook.construct_event(payload, signature, webhook_secret)
+    event_id = str(event.get("id") or "")
+    event_type = str(event.get("type") or "")
+    obj = event["data"]["object"]
+
+    if event_id and collection("billing_events").find_one({"provider_event_id": event_id}):
+        return {"ok": True, "duplicate": True, "type": event_type}
+
+    if event_type == "checkout.session.completed":
+        metadata = obj.get("metadata") or {}
+        intent_id = metadata.get("ashes_intent_id")
+        if intent_id:
+            complete_checkout_intent(
+                intent_id,
+                provider_session_id=obj.get("id"),
+                subscription_id=obj.get("subscription"),
+                customer_id=obj.get("customer"),
+            )
+            intent = get_checkout_intent(intent_id)
+            if intent:
+                record_subscription_event(intent["business_id"], event_type, {"intent_id": intent_id}, provider_event_id=event_id)
+    elif event_type in {"customer.subscription.deleted", "customer.subscription.paused"}:
+        metadata = obj.get("metadata") or {}
+        business_id = metadata.get("ashes_business_id")
+        if business_id:
+            collection("businesses").update_one(
+                {"id": business_id},
+                {"$set": {"subscription_status": "cancelled", "billing_updated_at": _now_iso()}},
+            )
+            record_subscription_event(business_id, event_type, {"subscription_id": obj.get("id")}, provider_event_id=event_id)
+    elif event_type in {"invoice.payment_failed"}:
+        subscription_id = obj.get("subscription")
+        business = clean_doc(collection("businesses").find_one({"billing_subscription_id": subscription_id})) if subscription_id else None
+        if business:
+            collection("businesses").update_one(
+                {"id": business["id"]},
+                {"$set": {"subscription_status": "past_due", "billing_updated_at": _now_iso()}},
+            )
+            record_subscription_event(business["id"], event_type, {"subscription_id": subscription_id}, provider_event_id=event_id)
+    else:
+        record_subscription_event("system", event_type, {}, provider_event_id=event_id)
+
+    return {"ok": True, "duplicate": False, "type": event_type}
