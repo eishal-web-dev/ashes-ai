@@ -2,7 +2,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Float, useGLTF } from '@react-three/drei';
 import { ArrowLeft, Box, Camera, Flame, Leaf, LoaderCircle, ScanLine, Sparkles, Utensils, Wheat } from 'lucide-react';
-import { absoluteApiUrl, getProduct } from './api';
+import { absoluteApiUrl, getProduct, trackProductEvent } from './api';
 
 function DemoFoodModel() {
   return (
@@ -37,12 +37,19 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
   const [product, setProduct] = useState(null);
   const [loadError, setLoadError] = useState('');
   const arViewerRef = useRef(null);
+  const trackedScanRef = useRef(false);
+  const tracked3DRef = useRef(false);
   const productId = useMemo(() => propProductId || new URLSearchParams(window.location.search).get('product'), [propProductId]);
 
   useEffect(() => {
     if (!productId) return;
     let cancelled = false;
     let timer;
+
+    if (!trackedScanRef.current) {
+      trackedScanRef.current = true;
+      trackProductEvent(productId, 'scan').catch(() => {});
+    }
 
     const load = async () => {
       try {
@@ -64,6 +71,12 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
     return () => { cancelled = true; clearTimeout(timer); };
   }, [productId]);
 
+  useEffect(() => {
+    if (!productId || mode !== '3d' || tracked3DRef.current) return;
+    tracked3DRef.current = true;
+    trackProductEvent(productId, 'view_3d').catch(() => {});
+  }, [mode, productId]);
+
   const data = product || {
     name: 'Quantum Smash Burger', price: 1290, calories: '~820 kcal', protein: '42 g', carbs: '56 g', fat: '47 g', tags: ['HIGH PROTEIN','HALAL','SPICY','DAIRY','GLUTEN'], status: productId ? 'loading' : 'demo', model_url: null,
   };
@@ -74,6 +87,7 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
 
   const launchAR = async () => {
     if (!modelReady || !arViewerRef.current) return;
+    if (productId) trackProductEvent(productId, 'ar_launch').catch(() => {});
     try {
       await arViewerRef.current.activateAR();
     } catch {
@@ -124,7 +138,7 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
               <div className="ar-placeholder">
                 <div className="ar-reticle"><ScanLine size={54} /></div>
                 <h3>{modelReady ? 'Place it in your space' : 'Preparing AR asset'}</h3>
-                <p>{modelReady ? 'Ashes can hand this GLB to your device AR viewer. On supported Android devices it can open Scene Viewer/WebXR; compatible Apple devices can use Quick Look when a supported asset is available.' : 'Ashes will enable placement once the generated 3D asset is ready.'}</p>
+                <p>{modelReady ? 'Ashes can hand this GLB to your device AR viewer.' : 'Ashes will enable placement once the generated 3D asset is ready.'}</p>
                 <button className="primary-action" disabled={!modelReady} onClick={launchAR}><Camera size={18} /> LAUNCH AR</button>
               </div>
             )}
@@ -135,7 +149,7 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
         </div>
 
         <aside className="product-info">
-          <div className="merchant-line"><div className="merchant-logo">NB</div><div><span>Now viewing</span><strong>Neon Bites</strong></div></div>
+          <div className="merchant-line"><div className="merchant-logo">A</div><div><span>Now viewing</span><strong>Ashes Partner</strong></div></div>
           <div className="product-heading"><div className="eyebrow pink">ASHES EXPERIENCE</div><h1>{data.name}</h1><p>{processing ? 'Your product has been saved. Ashes is preparing its interactive 3D twin.' : 'Explore this product as an interactive Ashes AI experience.'}</p></div>
           <div className="price-row"><strong>Rs {Number(data.price || 0).toLocaleString()}</strong><span>{modelReady ? '3D ready' : data.status}</span></div>
           <div className="stats-grid"><Stat icon={Flame} label="Calories" value={data.calories || '—'} /><Stat icon={Utensils} label="Protein" value={data.protein || '—'} /><Stat icon={Leaf} label="Carbs" value={data.carbs || '—'} /><Stat icon={Wheat} label="Fat" value={data.fat || '—'} /></div>
