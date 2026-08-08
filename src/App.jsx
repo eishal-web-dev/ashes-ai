@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { ArrowRight, Box, Camera, QrCode, ScanLine, Sparkles, Store, Utensils, Zap } from 'lucide-react';
+import ProductExperience from './ProductExperience';
 
 const experiences = [
   { icon: Utensils, title: 'Restaurants', text: 'Interactive dishes, nutrition, allergens and AR table placement.' },
@@ -14,6 +16,12 @@ const steps = [
 ];
 
 export default function App() {
+  const [view, setView] = useState('home');
+
+  if (view === 'product') {
+    return <ProductExperience onBack={() => setView('home')} />;
+  }
+
   return (
     <main className="site-shell">
       <div className="noise" />
@@ -33,7 +41,7 @@ export default function App() {
           <h1>TURN PRODUCTS<br /><span>INTO EXPERIENCES.</span></h1>
           <p>One photo becomes an interactive 3D experience customers can scan, explore and place in their world.</p>
           <div className="hero-actions">
-            <button className="primary-btn">Explore Ashes <ArrowRight size={17} /></button>
+            <button className="primary-btn" onClick={() => setView('product')}>Try live scan demo <ArrowRight size={17} /></button>
             <button className="secondary-btn">Join as a business</button>
           </div>
           <div className="proof-row">
@@ -70,7 +78,7 @@ export default function App() {
               <div className="icon-box"><Icon /></div>
               <h3>{title}</h3>
               <p>{text}</p>
-              <button className="text-btn">View experience <ArrowRight size={15} /></button>
+              <button className="text-btn" onClick={() => setView('product')}>View experience <ArrowRight size={15} /></button>
             </article>
           ))}
         </div>
