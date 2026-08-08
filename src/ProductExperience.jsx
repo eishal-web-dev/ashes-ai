@@ -1,8 +1,8 @@
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Float, useGLTF } from '@react-three/drei';
 import { ArrowLeft, Box, Camera, Flame, Leaf, LoaderCircle, ScanLine, Sparkles, Utensils, Wheat } from 'lucide-react';
-import { getProduct } from './api';
+import { absoluteApiUrl, getProduct } from './api';
 
 function DemoFoodModel() {
   return (
@@ -35,6 +35,8 @@ function Stat({ icon: Icon, label, value }) {
 export default function ProductExperience({ onBack, productId: propProductId }) {
   const [mode, setMode] = useState('3d');
   const [product, setProduct] = useState(null);
+  const [loadError, setLoadError] = useState('');
+  const arViewerRef = useRef(null);
   const productId = useMemo(() => propProductId || new URLSearchParams(window.location.search).get('product'), [propProductId]);
 
   useEffect(() => {
@@ -45,10 +47,16 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
     const load = async () => {
       try {
         const data = await getProduct(productId);
-        if (!cancelled) setProduct(data);
+        if (!cancelled) {
+          setProduct(data);
+          setLoadError('');
+        }
         if (!cancelled && ['queued', 'processing'].includes(data.status)) timer = setTimeout(load, 2500);
-      } catch {
-        if (!cancelled) setProduct(null);
+      } catch (error) {
+        if (!cancelled) {
+          setProduct(null);
+          setLoadError(error?.message || 'Product could not be loaded');
+        }
       }
     };
 
@@ -57,11 +65,21 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
   }, [productId]);
 
   const data = product || {
-    name: 'Quantum Smash Burger', price: 1290, calories: '~820 kcal', protein: '42 g', carbs: '56 g', fat: '47 g', tags: ['HIGH PROTEIN','HALAL','SPICY','DAIRY','GLUTEN'], status: 'demo', model_url: null,
+    name: 'Quantum Smash Burger', price: 1290, calories: '~820 kcal', protein: '42 g', carbs: '56 g', fat: '47 g', tags: ['HIGH PROTEIN','HALAL','SPICY','DAIRY','GLUTEN'], status: productId ? 'loading' : 'demo', model_url: null,
   };
 
-  const processing = ['queued', 'processing', 'awaiting-generator'].includes(data.status);
-  const modelReady = data.status === 'ready' && data.model_url;
+  const processing = ['queued', 'processing', 'awaiting-generator', 'loading'].includes(data.status);
+  const modelUrl = data.model_url ? absoluteApiUrl(data.model_url) : null;
+  const modelReady = data.status === 'ready' && Boolean(modelUrl);
+
+  const launchAR = async () => {
+    if (!modelReady || !arViewerRef.current) return;
+    try {
+      await arViewerRef.current.activateAR();
+    } catch {
+      setMode('ar');
+    }
+  };
 
   return (
     <main className="product-page">
@@ -71,6 +89,20 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
         <div className="brand-lockup"><div className="brand-mark">A</div><div><strong>ASHES AI</strong><span>LIVE EXPERIENCE</span></div></div>
         <div className="live-chip"><span /> {modelReady ? '3D READY' : processing ? 'AI PROCESSING' : 'QR CONNECTED'}</div>
       </header>
+
+      {modelReady && (
+        <model-viewer
+          ref={arViewerRef}
+          class="ashes-hidden-ar-viewer"
+          src={modelUrl}
+          ar
+          ar-modes="webxr scene-viewer quick-look"
+          camera-controls
+          shadow-intensity="1"
+          exposure="1"
+          alt={data.name}
+        />
+      )}
 
       <section className="product-experience-shell">
         <div className="product-visual glass-panel neon-edge">
@@ -85,13 +117,18 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
                 <ambientLight intensity={1.6} />
                 <pointLight position={[4, 5, 4]} intensity={28} color="#ff2aa3" />
                 <pointLight position={[-4, 1, 3]} intensity={22} color="#21e8ff" />
-                <Suspense fallback={null}>{modelReady ? <GeneratedModel url={data.model_url} /> : <DemoFoodModel />}</Suspense>
+                <Suspense fallback={null}>{modelReady ? <GeneratedModel url={modelUrl} /> : <DemoFoodModel />}</Suspense>
                 <OrbitControls enablePan={false} minDistance={3.3} maxDistance={9} autoRotate autoRotateSpeed={0.7} />
               </Canvas>
             ) : (
-              <div className="ar-placeholder"><div className="ar-reticle"><ScanLine size={54} /></div><h3>{modelReady ? 'AR asset ready' : 'Preparing AR asset'}</h3><p>{modelReady ? 'This product now has a GLB ready for the browser AR hand-off.' : 'Ashes will enable table placement once the generated GLB is ready.'}</p><button className="primary-action" disabled={!modelReady}><Camera size={18} /> OPEN CAMERA</button></div>
+              <div className="ar-placeholder">
+                <div className="ar-reticle"><ScanLine size={54} /></div>
+                <h3>{modelReady ? 'Place it in your space' : 'Preparing AR asset'}</h3>
+                <p>{modelReady ? 'Ashes can hand this GLB to your device AR viewer. On supported Android devices it can open Scene Viewer/WebXR; compatible Apple devices can use Quick Look when a supported asset is available.' : 'Ashes will enable placement once the generated 3D asset is ready.'}</p>
+                <button className="primary-action" disabled={!modelReady} onClick={launchAR}><Camera size={18} /> LAUNCH AR</button>
+              </div>
             )}
-            {processing && <div className="floating-chip chip-one"><LoaderCircle size={13} className="spin-icon" /> {data.status === 'awaiting-generator' ? 'GENERATOR NEEDED' : 'GENERATING 3D'}</div>}
+            {processing && <div className="floating-chip chip-one"><LoaderCircle size={13} className="spin-icon" /> {data.status === 'awaiting-generator' ? 'GENERATOR NEEDED' : data.status === 'loading' ? 'LOADING PRODUCT' : 'GENERATING 3D'}</div>}
             {modelReady && <div className="floating-chip chip-one">100% MODEL READY</div>}
             <div className="floating-chip chip-two">REAL-TIME 3D</div><div className="floating-chip chip-three">DRAG TO ROTATE</div>
           </div>
@@ -103,9 +140,10 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
           <div className="price-row"><strong>Rs {Number(data.price || 0).toLocaleString()}</strong><span>{modelReady ? '3D ready' : data.status}</span></div>
           <div className="stats-grid"><Stat icon={Flame} label="Calories" value={data.calories || '—'} /><Stat icon={Utensils} label="Protein" value={data.protein || '—'} /><Stat icon={Leaf} label="Carbs" value={data.carbs || '—'} /><Stat icon={Wheat} label="Fat" value={data.fat || '—'} /></div>
           <div className="tag-row">{(data.tags || []).map(tag => <span key={tag}>{tag}</span>)}</div>
+          {loadError && <div className="allergen-note glass-panel"><strong>Product loading</strong><p>{loadError}</p></div>}
           {data.error_message && <div className="allergen-note glass-panel"><strong>3D pipeline status</strong><p>{data.error_message}</p></div>}
           <div className="allergen-note glass-panel"><strong>Smart nutrition</strong><p>Restaurant-provided values should be treated as authoritative. AI estimates should stay clearly labelled until approved.</p></div>
-          <div className="cta-stack"><button className="primary-action wide" disabled={!modelReady}><Camera size={19} /> VIEW ON MY TABLE</button><button className="secondary-action wide"><Utensils size={19} /> ADD TO ORDER</button></div>
+          <div className="cta-stack"><button className="primary-action wide" disabled={!modelReady} onClick={launchAR}><Camera size={19} /> VIEW ON MY TABLE</button><button className="secondary-action wide"><Utensils size={19} /> ADD TO ORDER</button></div>
         </aside>
       </section>
     </main>
