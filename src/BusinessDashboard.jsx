@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeft, BarChart3, Bell, Box, Building2, Camera, Check, ChefHat, ChevronRight, Download, ImagePlus, LogOut, Pencil, Plus, QrCode, ScanLine, Sparkles, Trash2, Upload, Utensils, WandSparkles, X } from 'lucide-react';
-import { absoluteApiUrl, clearSession, createBusinessProduct, createTableQr, deleteBusinessProduct, getBusinessAnalytics, getBusinessOrders, getBusinessProducts, getMenuImports, getOrderNotifications, getTableQrs, importMenuCard, updateBusinessProduct, updateBusinessProfile, updateOrderStatus, uploadBusinessLogo } from './api';
+import { absoluteApiUrl, attachBusinessProductPhoto, clearSession, createBusinessProduct, createTableQr, deleteBusinessProduct, getBusinessAnalytics, getBusinessOrders, getBusinessProducts, getMenuImports, getOrderNotifications, getTableQrs, importMenuCard, updateBusinessProduct, updateBusinessProfile, updateOrderStatus, uploadBusinessLogo } from './api';
 
 export default function BusinessDashboard({ onBack, onOpenProduct, business, user, onLogout, onBusinessUpdated }) {
   const [step, setStep] = useState('dashboard');
@@ -29,6 +29,7 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
   const [menuImporting, setMenuImporting] = useState(false);
   const [menuImportResult, setMenuImportResult] = useState(null);
   const [menuImports, setMenuImports] = useState([]);
+  const [photoUploadingId, setPhotoUploadingId] = useState(null);
   const seenAlertIds = useRef(new Set());
   const slug = business?.slug;
 
@@ -46,7 +47,7 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
         getBusinessProducts(slug, true), getBusinessAnalytics(slug), getBusinessOrders(slug), getTableQrs(slug), getMenuImports(slug),
       ]);
       const metricMap = Object.fromEntries((metrics.products || []).map(p => [p.id, p]));
-      setProducts(items.map(item => ({ ...item, ...(metricMap[item.id] || {}) }));
+      setProducts(items.map(item => ({ ...item, ...(metricMap[item.id] || {}) })));
       setAnalytics(metrics); setOrders(latestOrders || []); setTableQrs(qrs || []); setMenuImports(imports || []);
     } catch {}
   };
@@ -77,6 +78,7 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
   const totals = useMemo(() => ({
     scans: analytics.scans || 0, views: analytics.views_3d || 0, ar: analytics.ar_launches || 0,
     ready: products.filter(p => p.status === 'ready').length, published: products.filter(p => p.is_published).length,
+    needsPhotos: products.filter(p => p.status === 'awaiting-image').length,
     revenue: orders.filter(o => o.status !== 'cancelled').reduce((sum, o) => sum + Number(o.total || 0), 0),
     openOrders: orders.filter(o => !['served', 'cancelled'].includes(o.status)).length,
   }), [analytics, products, orders]);
@@ -100,6 +102,17 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
       await loadDashboard();
     } catch (err) { setError(err.message || 'Could not import menu card'); }
     finally { setMenuImporting(false); }
+  };
+
+  const attachProductPhoto = async (product, file) => {
+    if (!file || !slug) return;
+    setPhotoUploadingId(product.id); setError('');
+    try {
+      const updated = await attachBusinessProductPhoto(slug, product.id, file);
+      setProducts(prev => prev.map(p => p.id === product.id ? { ...p, ...updated } : p));
+      setTimeout(loadDashboard, 1200);
+    } catch (err) { setError(err.message || `Could not upload photo for ${product.name}`); }
+    finally { setPhotoUploadingId(null); }
   };
 
   const saveBranding = async () => {
@@ -161,16 +174,11 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
     <section className="menu-import-panel glass-panel">
       <div className="menu-import-copy"><span className="kicker">INSTANT BUSINESS SETUP</span><h2>Turn one menu-card photo into your Ashes catalog.</h2><p>Upload a clear photo of the restaurant's existing menu. Ashes extracts categories, item names, prices and visible business details, then creates everything as drafts for review.</p><div className="menu-import-pipeline"><span>MENU PHOTO</span><i>→</i><span>AI READS IT</span><i>→</i><span>DRAFT CATALOG</span><i>→</i><span>ADD PRODUCT PHOTOS</span><i>→</i><span>3D + QR</span></div></div>
       <div className="menu-import-action"><label className="menu-import-drop"><input type="file" accept="image/*" onChange={e => setMenuImportFile(e.target.files?.[0] || null)} /><WandSparkles size={28}/><strong>{menuImportFile?.name || 'Choose menu-card photo'}</strong><span>JPG, PNG or WEBP · use a straight, readable photo</span></label><button className="primary-btn wide" disabled={!menuImportFile || menuImporting} onClick={runMenuImport}>{menuImporting ? 'Ashes is reading the menu…' : 'Build business from menu card'} <Sparkles size={16}/></button></div>
-      {menuImportResult && <div className="menu-import-result-wrap">
-        <div className="menu-import-result"><Check size={19}/><div><strong>{menuImportResult.created_count} drafts created from {menuImportResult.items_detected} detected items.</strong><span>Nothing is published automatically. Review the catalog, add product photos for 3D, then publish when ready.</span></div></div>
-        <div className="menu-import-summary-grid"><div><strong>{menuImportResult.created_count || 0}</strong><span>Created</span></div><div><strong>{menuImportResult.skipped_duplicates?.length || 0}</strong><span>Duplicates skipped</span></div><div><strong>{menuImportResult.review_count || 0}</strong><span>Needs review</span></div></div>
-        {menuImportResult.review_items?.length > 0 && <div className="menu-review-list"><div className="menu-review-title"><AlertTriangle size={16}/><strong>Check these low-confidence items</strong></div>{menuImportResult.review_items.slice(0,8).map(item => <span key={`${item.category}-${item.name}`}>{item.name} · {Math.round(Number(item.confidence || 0) * 100)}% confidence</span>)}</div>}
-        {menuImportResult.skipped_duplicates?.length > 0 && <div className="menu-duplicate-note">Skipped existing items: {menuImportResult.skipped_duplicates.slice(0,8).join(', ')}{menuImportResult.skipped_duplicates.length > 8 ? '…' : ''}</div>}
-      </div>}
+      {menuImportResult && <div className="menu-import-result"><Check size={19}/><div><strong>{menuImportResult.items_found} drafts created · {menuImportResult.duplicates_skipped || 0} duplicates skipped.</strong><span>{menuImportResult.review_items?.length ? `${menuImportResult.review_items.length} item(s) need a quick review before publishing.` : 'AI extraction looks clean. Review prices, then add product photos for 3D.'}</span>{menuImportResult.review_items?.length > 0 && <div className="menu-review-list">{menuImportResult.review_items.slice(0,8).map((item,index)=><span key={`${item.name}-${index}`}><AlertTriangle size={13}/>{item.name || 'Unnamed item'}{item.confidence != null ? ` · ${Math.round(item.confidence*100)}% confidence` : ''}</span>)}</div>}</div></div>}
       {menuImports[0]?.status === 'failed' && !menuImportResult && <div className="form-error">Last menu import failed: {menuImports[0].error_message}</div>}
     </section>
 
-    <div className="stat-grid business-stats"><article><span>PRODUCTS</span><strong>{products.length}</strong><em>{totals.published} published</em></article><article><span>LIVE ORDERS</span><strong>{totals.openOrders}</strong><em>Waiting / preparing</em></article><article><span>ORDER VALUE</span><strong>Rs {totals.revenue.toLocaleString()}</strong><em>Non-cancelled orders</em></article><article><span>TABLE QRS</span><strong>{tableQrs.length}</strong><em>Printable entry points</em></article></div>
+    <div className="stat-grid business-stats"><article><span>PRODUCTS</span><strong>{products.length}</strong><em>{totals.published} published</em></article><article><span>NEED PHOTOS</span><strong>{totals.needsPhotos}</strong><em>Imported items awaiting 3D</em></article><article><span>LIVE ORDERS</span><strong>{totals.openOrders}</strong><em>Waiting / preparing</em></article><article><span>ORDER VALUE</span><strong>Rs {totals.revenue.toLocaleString()}</strong><em>Non-cancelled orders</em></article></div>
 
     <section className="business-settings-panel glass-panel" id="business-settings"><div className="panel-head"><div><span className="kicker">BUSINESS IDENTITY</span><h2>Brand your Ashes experience</h2></div></div><div className="business-settings-grid"><div className="business-logo-editor"><div className="brand-logo-preview">{business?.logo_url ? <img src={absoluteApiUrl(business.logo_url)} alt={business.name}/> : initial}</div><label className="secondary-btn"><Upload size={15}/> Choose logo<input hidden type="file" accept="image/*" onChange={e => setLogoFile(e.target.files?.[0] || null)} /></label>{logoFile && <span>{logoFile.name}</span>}</div><div className="business-fields"><div className="field-row two"><label><span>Business name</span><input value={brandForm.name} onChange={e=>setBrandForm({...brandForm,name:e.target.value})}/></label><label><span>Business type</span><select value={brandForm.kind} onChange={e=>setBrandForm({...brandForm,kind:e.target.value})}><option>restaurant</option><option>cafe</option><option>retail</option><option>fashion</option><option>furniture</option></select></label></div><div className="field-row two"><label><span>City</span><input value={brandForm.city} onChange={e=>setBrandForm({...brandForm,city:e.target.value})}/></label><label><span>Phone</span><input value={brandForm.phone} onChange={e=>setBrandForm({...brandForm,phone:e.target.value})}/></label></div><div className="field-row two"><label><span>Instagram</span><input value={brandForm.instagram} onChange={e=>setBrandForm({...brandForm,instagram:e.target.value})}/></label><label><span>Website</span><input value={brandForm.website} onChange={e=>setBrandForm({...brandForm,website:e.target.value})}/></label></div><label className="accent-field"><span>Brand accent</span><div><input type="color" value={brandForm.accent_color} onChange={e=>setBrandForm({...brandForm,accent_color:e.target.value})}/><code>{brandForm.accent_color}</code></div></label><button className="primary-btn" disabled={savingBrand} onClick={saveBranding}>{savingBrand ? 'Saving brand…' : 'Save business identity'}</button></div></div>{error && <div className="form-error">{error}</div>}</section>
 
@@ -179,8 +187,18 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
     <section className="table-qr-panel glass-panel"><div className="panel-head"><div><span className="kicker">TABLE ENTRY POINTS</span><h2>Create printable QR codes</h2></div></div><div className="table-qr-builder"><label><span>Table code</span><input value={tableCode} onChange={e => setTableCode(e.target.value.toUpperCase())} placeholder="T01" /></label><label><span>Open directly to product (optional)</span><select value={tableProductId} onChange={e => setTableProductId(e.target.value)}><option value="">Table session only</option>{products.filter(p => p.is_published).map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></label><button className="primary-btn" onClick={addTableQr}><Plus size={16}/> Create table QR</button></div>{error && <div className="form-error">{error}</div>}<div className="table-qr-grid">{tableQrs.length === 0 && <div className="empty-catalog">Create T01, T02, Counter, Patio-1, or any code the restaurant uses.</div>}{tableQrs.map(qr => <article className="table-qr-card" key={qr.id}><img src={absoluteApiUrl(qr.qr_url)} alt={`QR for table ${qr.table_code}`} /><div><strong>Table {qr.table_code}</strong><span>{qr.public_url}</span><a className="secondary-btn" href={absoluteApiUrl(qr.qr_url)} download={`ashes-${business?.slug}-${qr.table_code}.png`}><Download size={15}/> Download QR</a></div></article>)}</div></section>
 
     <section className="catalog-panel glass-panel"><div className="panel-head"><div><span className="kicker">CATALOG CONTROL</span><h2>Products, drafts & publishing</h2></div><button className="text-btn" onClick={() => setStep('add')}>Add new <ChevronRight size={15}/></button></div><div className="product-table">{products.length === 0 && <div className="empty-catalog">No products yet. Upload one product or import the restaurant's menu card above.</div>}{products.map(product => {
-      const ready = product.status === 'ready'; const isEditing = editing === product.id;
-      return <div className={`product-row managed ${!product.is_published ? 'draft-row' : ''}`} key={product.id}><div className="product-thumb">{product.image_url ? <img src={absoluteApiUrl(product.image_url)} alt={product.name}/> : <Box size={19}/>}</div>{isEditing ? <div className="inline-product-editor"><input value={editForm.name} onChange={e=>setEditForm({...editForm,name:e.target.value})}/><input value={editForm.category} onChange={e=>setEditForm({...editForm,category:e.target.value})}/><input type="number" value={editForm.price} onChange={e=>setEditForm({...editForm,price:e.target.value})}/></div> : <div className="product-meta"><strong>{product.name}</strong><span>{product.category} · Rs {Number(product.price).toLocaleString()}</span></div>}<span className={`publish-pill ${product.is_published ? 'published' : 'draft'}`}>{product.is_published ? 'Published' : 'Draft'}</span><span className={`status-pill ${ready ? 'ready' : 'processing'}`}>{ready ? '3D Ready' : product.status}</span><div className="catalog-actions">{isEditing ? <><button onClick={() => saveEdit(product.id)}>Save</button><button onClick={() => {setEditing(null);setEditForm(null)}}>Cancel</button></> : <><button onClick={() => beginEdit(product)}><Pencil size={14}/> Edit</button><button onClick={() => togglePublish(product)}>{product.is_published ? 'Unpublish' : 'Publish'}</button><button className="danger" onClick={() => removeProduct(product)}><Trash2 size={14}/></button></>}</div></div>;
-    })}</div></section>
-  </section></div></main>;
+      const ready = product.status === 'ready'; const isEditing = editing === product.id; const needsPhoto = product.status === 'awaiting-image';
+      return <div className={`product-row managed ${!product.is_published ? 'draft-row' : ''}`} key={product.id}>
+        <div className="product-thumb">{product.image_url ? <img src={absoluteApiUrl(product.image_url)} alt={product.name}/> : <Box size={19}/>}</div>
+        {isEditing ? <div className="inline-product-editor"><input value={editForm.name} onChange={e=>setEditForm({...editForm,name:e.target.value})}/><input value={editForm.category} onChange={e=>setEditForm({...editForm,category:e.target.value})}/><input type="number" value={editForm.price} onChange={e=>setEditForm({...editForm,price:e.target.value})}/></div> : <div className="product-meta"><strong>{product.name}</strong><span>{product.category} · Rs {Number(product.price).toLocaleString()}</span>{needsPhoto && <em className="needs-photo-note">Imported from menu · add a real product photo to generate 3D</em>}</div>}
+        <span className={`publish-pill ${product.is_published ? 'published' : 'draft'}`}>{product.is_published ? 'Published' : 'Draft'}</span>
+        <span className={`status-pill ${ready ? 'ready' : 'processing'}`}>{ready ? '3D Ready' : product.status}</span>
+        <div className="catalog-actions">
+          {needsPhoto && <label className={`photo-generate-btn ${photoUploadingId === product.id ? 'busy' : ''}`}><Camera size={14}/>{photoUploadingId === product.id ? 'Uploading…' : 'Add photo + 3D'}<input type="file" accept="image/*" disabled={photoUploadingId === product.id} onChange={e => { const file=e.target.files?.[0]; e.target.value=''; attachProductPhoto(product,file); }} /></label>}
+          {isEditing ? <><button onClick={() => saveEdit(product.id)}>Save</button><button onClick={() => {setEditing(null);setEditForm(null)}}>Cancel</button></> : <><button onClick={() => beginEdit(product)}><Pencil size={14}/> Edit</button><button onClick={() => togglePublish(product)} disabled={needsPhoto}>{product.is_published ? 'Unpublish' : 'Publish'}</button><button className="danger" onClick={() => removeProduct(product)}><Trash2 size={14}/></button></>}
+        </div>
+        <button className="row-action" disabled={!ready} onClick={() => onOpenProduct?.(product.id)}><ChevronRight size={17}/></button>
+      </div>; })}</div></section>
+    </section>
+  </div></main>;
 }
