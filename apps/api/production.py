@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from fastapi.middleware.cors import CORSMiddleware
 
-# Import the storage-aware Mongo entrypoint so production boots with the
-# persistent-media helpers registered alongside the existing API routes.
+# Import storage-aware Mongo routes first so production uses persistent media.
 from apps.api.storage_main import app
+import apps.api.storage_menu_import  # noqa: F401
 from apps.api.mongo_db import database
 
 
@@ -29,8 +28,6 @@ def _storage_info() -> dict:
     return info
 
 
-# mongo_main keeps permissive CORS for local development. Production adds a
-# final restrictive middleware layer configured by ASHES_ALLOWED_ORIGINS.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
