@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Globe2, Instagram, Minus, Phone, Plus, ShoppingBag, Sparkles, Utensils, X } from 'lucide-react';
-import { absoluteApiUrl, createOrder, getBusinessProducts, getBusinessProfile } from './api';
+import { ArrowLeft, CheckCircle2, CircleDot, Clock3, Globe2, Instagram, Minus, Phone, Plus, ShoppingBag, Sparkles, Utensils, X } from 'lucide-react';
+import { absoluteApiUrl, createOrder, getBusinessProducts, getBusinessProfile, getOrder } from './api';
+
+const orderSteps = ['new', 'accepted', 'preparing', 'ready', 'served'];
 
 export default function MenuExperience({ businessSlug, tableCode, onBack, onOpenProduct }) {
   const [products, setProducts] = useState([]);
@@ -20,6 +22,17 @@ export default function MenuExperience({ businessSlug, tableCode, onBack, onOpen
       .then(([items, profile]) => { setProducts(items); setBusiness(profile); })
       .catch(() => setError('Could not load menu'));
   }, [businessSlug]);
+
+  useEffect(() => {
+    if (!result?.id || ['served', 'cancelled'].includes(result.status)) return;
+    const timer = setInterval(async () => {
+      try {
+        const latest = await getOrder(result.id);
+        setResult(latest);
+      } catch {}
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [result?.id, result?.status]);
 
   const categories = useMemo(() => ['All', ...Array.from(new Set(products.map(p => p.category || 'Main')))], [products]);
   const filtered = category === 'All' ? products : products.filter(p => (p.category || 'Main') === category);
@@ -52,6 +65,8 @@ export default function MenuExperience({ businessSlug, tableCode, onBack, onOpen
     } finally { setPlacing(false); }
   };
 
+  const activeStep = result ? Math.max(0, orderSteps.indexOf(result.status)) : 0;
+
   return <main className="menu-page" style={{ '--business-accent': accent }}>
     <div className="noise" />
     <header className="menu-topbar container">
@@ -60,7 +75,7 @@ export default function MenuExperience({ businessSlug, tableCode, onBack, onOpen
         <div className="menu-brand-logo">{business?.logo_url ? <img src={absoluteApiUrl(business.logo_url)} alt={business.name}/> : initial}</div>
         <div><strong>{business?.name || 'Ashes Partner'}</strong><span>POWERED BY ASHES AI</span></div>
       </div>
-      <button className="cart-pill" onClick={() => setCartOpen(true)}><ShoppingBag size={16}/> {cartCount} · Rs {total.toLocaleString()}</button>
+      <button className="cart-pill" onClick={() => setCartOpen(true)}><ShoppingBag size={16}/> {result ? result.status.toUpperCase() : `${cartCount} · Rs ${total.toLocaleString()}`}</button>
     </header>
 
     <section className="menu-hero container">
@@ -96,7 +111,17 @@ export default function MenuExperience({ businessSlug, tableCode, onBack, onOpen
     {cartOpen && <div className="cart-backdrop" onClick={() => setCartOpen(false)}>
       <aside className="order-drawer glass-panel" onClick={e => e.stopPropagation()}>
         <div className="order-drawer-head"><div><span className="kicker">TABLE ORDER</span><h2>{business?.name || 'Your'} cart</h2></div><button className="icon-button" onClick={() => setCartOpen(false)}><X size={18}/></button></div>
-        {result ? <div className="order-success"><h3>Order sent.</h3><p>Order <strong>#{result.id.slice(0,8).toUpperCase()}</strong> is in the restaurant queue.</p><div className="order-status-line"><span>Total</span><strong>Rs {Number(result.total).toLocaleString()}</strong></div></div> : <>
+        {result ? <div className="order-success live-order-status">
+          <div className={`status-orb ${result.status === 'ready' ? 'ready' : ''}`}>{result.status === 'ready' || result.status === 'served' ? <CheckCircle2 size={32}/> : <Clock3 size={32}/>}</div>
+          <h3>{result.status === 'ready' ? 'Your order is ready!' : result.status === 'served' ? 'Order served.' : result.status === 'cancelled' ? 'Order cancelled.' : 'Order is moving.'}</h3>
+          <p>Order <strong>#{result.id.slice(0,8).toUpperCase()}</strong>{tableCode ? ` · Table ${tableCode}` : ''}</p>
+          <div className="order-progress">
+            {orderSteps.map((step, index) => <div key={step} className={`${index <= activeStep ? 'active' : ''} ${result.status === step ? 'current' : ''}`}><span>{index < activeStep ? <CheckCircle2 size={15}/> : <CircleDot size={15}/>}</span><b>{step}</b></div>)}
+          </div>
+          <div className="order-status-line"><span>Status</span><strong>{result.status}</strong></div>
+          <div className="order-status-line"><span>Total</span><strong>Rs {Number(result.total).toLocaleString()}</strong></div>
+          <p className="live-status-note">This screen updates automatically while the restaurant prepares your order.</p>
+        </div> : <>
           <div className="multi-cart-items">{cartItems.length === 0 && <p>Your cart is empty.</p>}{cartItems.map(({ product, quantity }) => <div className="multi-cart-row" key={product.id}><div><strong>{product.name}</strong><span>Rs {Number(product.price).toLocaleString()}</span></div><div className="qty-control"><button onClick={() => changeQty(product.id,-1)}><Minus size={14}/></button><strong>{quantity}</strong><button onClick={() => changeQty(product.id,1)}><Plus size={14}/></button></div></div>)}</div>
           <label className="order-field"><span>Your name (optional)</span><input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Name"/></label>
           <label className="order-field"><span>Notes</span><textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="No onions, extra sauce…"/></label>
