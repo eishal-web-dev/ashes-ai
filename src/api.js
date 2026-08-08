@@ -114,10 +114,18 @@ export async function trackProductEvent(productId, eventType) {
 }
 export async function getBillingPlans() { return apiFetch('/api/billing/plans'); }
 export async function getBusinessBilling(slug) { return apiFetch(`/api/businesses/${slug}/billing`, {}, true); }
-export async function changeBusinessPlan(slug, plan) {
-  return apiFetch(`/api/businesses/${slug}/billing/plan`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }),
+export async function getBillingHistory(slug) { return apiFetch(`/api/businesses/${slug}/billing/history`, {}, true); }
+export async function createBillingCheckout(slug, plan, successUrl = null, cancelUrl = null) {
+  return apiFetch(`/api/businesses/${slug}/billing/checkout`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan, success_url: successUrl, cancel_url: cancelUrl }),
   }, true);
+}
+export async function getBillingCheckout(slug, intentId) {
+  return apiFetch(`/api/businesses/${slug}/billing/checkout/${intentId}`, {}, true);
+}
+export async function devCompleteBillingCheckout(slug, intentId) {
+  return apiFetch(`/api/businesses/${slug}/billing/checkout/${intentId}/dev-complete`, { method: 'POST' }, true);
 }
 export function absoluteApiUrl(path) {
   if (!path) return null;
