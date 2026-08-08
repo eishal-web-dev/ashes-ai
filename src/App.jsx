@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowRight, Box, Camera, QrCode, ScanLine, Sparkles, Store, Utensils, Zap } from 'lucide-react';
 import ProductExperience from './ProductExperience';
+import BusinessDashboard from './BusinessDashboard';
 
 const experiences = [
   { icon: Utensils, title: 'Restaurants', text: 'Interactive dishes, nutrition, allergens and AR table placement.' },
@@ -18,9 +19,8 @@ const steps = [
 export default function App() {
   const [view, setView] = useState('home');
 
-  if (view === 'product') {
-    return <ProductExperience onBack={() => setView('home')} />;
-  }
+  if (view === 'product') return <ProductExperience onBack={() => setView('home')} />;
+  if (view === 'business') return <BusinessDashboard onBack={() => setView('home')} onOpenProduct={() => setView('product')} />;
 
   return (
     <main className="site-shell">
@@ -32,7 +32,7 @@ export default function App() {
           <a href="#how">How it works</a>
           <a href="#business">For business</a>
         </div>
-        <button className="ghost-btn">Join Ashes <ArrowRight size={16} /></button>
+        <button className="ghost-btn" onClick={() => setView('business')}>Join Ashes <ArrowRight size={16} /></button>
       </nav>
 
       <section className="hero container" id="top">
@@ -42,7 +42,7 @@ export default function App() {
           <p>One photo becomes an interactive 3D experience customers can scan, explore and place in their world.</p>
           <div className="hero-actions">
             <button className="primary-btn" onClick={() => setView('product')}>Try live scan demo <ArrowRight size={17} /></button>
-            <button className="secondary-btn">Join as a business</button>
+            <button className="secondary-btn" onClick={() => setView('business')}>Join as a business</button>
           </div>
           <div className="proof-row">
             <div><strong>1</strong><span>photo to start</span></div>
@@ -86,9 +86,7 @@ export default function App() {
 
       <section className="flow-section" id="how">
         <div className="container">
-          <div className="section-head compact">
-            <div><span className="kicker">FROM CAMERA TO COMMERCE</span><h2>Four steps. No friction.</h2></div>
-          </div>
+          <div className="section-head compact"><div><span className="kicker">FROM CAMERA TO COMMERCE</span><h2>Four steps. No friction.</h2></div></div>
           <div className="steps-grid">
             {steps.map(({ n, icon: Icon, title, text }) => (
               <article className="step-card" key={n}>
@@ -110,15 +108,13 @@ export default function App() {
             <div className="metric"><span>3D VIEWS</span><strong>6,911</strong><em>+19.8%</em></div>
             <div className="metric"><span>AR LAUNCHES</span><strong>3,482</strong><em>+34.1%</em></div>
           </div>
-          <div className="fake-chart">
-            {[28, 42, 35, 57, 49, 68, 62, 81, 71, 90, 78, 96].map((h, i) => <i key={i} style={{height: `${h}%`}} />)}
-          </div>
+          <div className="fake-chart">{[28, 42, 35, 57, 49, 68, 62, 81, 71, 90, 78, 96].map((h, i) => <i key={i} style={{height: `${h}%`}} />)}</div>
         </div>
         <div className="business-copy">
           <span className="kicker">YOUR DIGITAL TWIN LAYER</span>
           <h2>Built to sell to the next hundred cafés — not rebuild for each one.</h2>
           <p>Every business gets its own profile, catalog, 3D assets, QR codes, analytics and billing while Ashes remains one platform.</p>
-          <button className="primary-btn">Become an Ashes business <ArrowRight size={17} /></button>
+          <button className="primary-btn" onClick={() => setView('business')}>Become an Ashes business <ArrowRight size={17} /></button>
         </div>
       </section>
 
