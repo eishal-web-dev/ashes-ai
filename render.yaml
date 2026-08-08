@@ -4,8 +4,8 @@ services:
     runtime: python
     rootDir: .
     buildCommand: pip install -r apps/api/requirements.txt
-    startCommand: uvicorn apps.api.mongo_main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    startCommand: uvicorn apps.api.production:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /production-health
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
