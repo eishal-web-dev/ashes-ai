@@ -33,7 +33,7 @@ API_BASE_URL = os.getenv("ASHES_API_BASE_URL", "http://localhost:8000")
 
 for directory in (DATA_DIR, UPLOAD_DIR, QR_DIR, MODEL_DIR, LOGO_DIR, MENU_IMPORT_DIR): directory.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Ashes AI API", version="1.1.0")
+app = FastAPI(title="Ashes AI API", version="1.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 def db() -> sqlite3.Connection:
@@ -116,7 +116,7 @@ def queue_3d_generation(product_id:str,image_path:Path)->None:
     threading.Thread(target=run_generation_job,args=(product_id,image_path),daemon=True,name=f"ashes-3d-{product_id[:8]}").start()
 
 @app.get("/health")
-def health(): return {"ok":True,"service":"ashes-api","version":"1.1.0"}
+def health(): return {"ok":True,"service":"ashes-api","version":"1.2.0"}
 
 @app.post("/api/auth/signup")
 def signup(payload:SignupPayload):
@@ -205,7 +205,9 @@ async def import_menu_card(business_slug:str,image:UploadFile=File(...),user:sql
         if not items: raise ValueError("No menu items were detected")
         with db() as conn:
             import_result=import_products(conn,business["id"],items,PUBLIC_BASE_URL,QR_DIR)
-            created_ids=import_result["created_ids"]
+            created_ids=import_result.get("created_ids",[])
+            skipped_duplicates=import_result.get("skipped_duplicates",[])
+            review_items=import_result.get("review_items",[])
             detected_business=extracted.get("business") or {}
             updates=[]; values=[]
             for field in ("phone","instagram","website","city"):
@@ -217,22 +219,10 @@ async def import_menu_card(business_slug:str,image:UploadFile=File(...),user:sql
                 values.append(business["id"]); conn.execute(f"UPDATE businesses SET {', '.join(updates)} WHERE id=?",values)
             conn.execute("UPDATE menu_imports SET status='completed',items_found=?,error_message=NULL WHERE id=?",(len(created_ids),import_id))
             profile=conn.execute("SELECT * FROM businesses WHERE id=?",(business["id"],)).fetchone()
-            rows=[]
             if created_ids:
-                rows=conn.execute(f"SELECT * FROM products WHERE id IN ({','.join(['?']*len(created_ids))}) ORDER BY created_at DESC",created_ids).fetchall()
-        return {
-            "import_id":import_id,
-            "status":"completed",
-            "items_detected":len(items),
-            "items_found":len(created_ids),
-            "created_count":import_result["created_count"],
-            "skipped_duplicates":import_result["skipped_duplicates"],
-            "review_items":import_result["review_items"],
-            "review_count":len(import_result["review_items"]),
-            "business":business_from_row(profile),
-            "products":[product_from_row(row) for row in rows],
-            "review_required":True,
-        }
+                placeholders=','.join(['?']*len(created_ids)); rows=conn.execute(f"SELECT * FROM products WHERE id IN ({placeholders}) ORDER BY created_at DESC",created_ids).fetchall()
+            else: rows=[]
+        return {"import_id":import_id,"status":"completed","items_found":len(created_ids),"detected_items":len(items),"duplicates_skipped":len(skipped_duplicates),"duplicate_names":skipped_duplicates,"review_items":review_items,"business":business_from_row(profile),"products":[product_from_row(row) for row in rows],"review_required":True}
     except Exception as exc:
         with db() as conn: conn.execute("UPDATE menu_imports SET status='failed',error_message=? WHERE id=?",(str(exc)[:800],import_id))
         raise HTTPException(status_code=400,detail=str(exc)) from exc
@@ -310,6 +300,30 @@ async def create_product(business_slug:str,name:str=Form(...),price:float=Form(.
         conn.execute("INSERT INTO products (id,business_id,name,category,price,calories,protein,carbs,fat,tags,image_path,status,qr_code,is_published) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)",(product_id,business["id"],name,category,price,calories,protein,carbs,fat,tags,str(image_path),"queued",str(qr_path)))
         row=conn.execute("SELECT * FROM products WHERE id=?",(product_id,)).fetchone()
     queue_3d_generation(product_id,image_path); return product_from_row(row)
+
+@app.post("/api/businesses/{business_slug}/products/{product_id}/photo",response_model=ProductOut)
+async def attach_product_photo(business_slug:str,product_id:str,image:UploadFile=File(...),user:sqlite3.Row=Depends(auth_user)):
+    business=owned_business(user["id"],business_slug)
+    if not image.content_type or not image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400,detail="Product photo must be an image")
+    with db() as conn:
+        row=conn.execute("SELECT * FROM products WHERE id=? AND business_id=?",(product_id,business["id"])).fetchone()
+    if not row: raise HTTPException(status_code=404,detail="Product not found")
+    extension=Path(image.filename or "product.jpg").suffix.lower() or ".jpg"
+    image_path=UPLOAD_DIR/f"{product_id}{extension}"
+    image_path.write_bytes(await image.read())
+    old_image=row["image_path"]; old_model=row["model_path"]
+    if old_image and Path(old_image)!=image_path:
+        try: Path(old_image).unlink(missing_ok=True)
+        except OSError: pass
+    if old_model:
+        try: Path(old_model).unlink(missing_ok=True)
+        except OSError: pass
+    with db() as conn:
+        conn.execute("UPDATE products SET image_path=?,model_path=NULL,status='queued',error_message=NULL WHERE id=? AND business_id=?",(str(image_path),product_id,business["id"]))
+        updated=conn.execute("SELECT * FROM products WHERE id=?",(product_id,)).fetchone()
+    queue_3d_generation(product_id,image_path)
+    return product_from_row(updated)
 
 @app.patch("/api/businesses/{business_slug}/products/{product_id}",response_model=ProductOut)
 def update_product(business_slug:str,product_id:str,payload:ProductUpdatePayload,user:sqlite3.Row=Depends(auth_user)):
