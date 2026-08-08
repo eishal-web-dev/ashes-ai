@@ -1,42 +1,53 @@
-import { useMemo, useState } from 'react';
-import { ArrowLeft, BarChart3, Box, Building2, Camera, Check, ChevronRight, ImagePlus, QrCode, ScanLine, Sparkles, Store, Upload, Utensils } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, BarChart3, Box, Building2, Camera, Check, ChevronRight, ImagePlus, QrCode, ScanLine, Sparkles, Upload, Utensils } from 'lucide-react';
+import { absoluteApiUrl, createBusinessProduct, getBusinessProducts } from './api';
 
 const seedProducts = [
-  { id: 1, name: 'Neon Smash Burger', category: 'Burgers', price: 1290, status: '3D Ready', scans: 482, ar: 211 },
-  { id: 2, name: 'Midnight Mocha', category: 'Coffee', price: 640, status: 'Processing', scans: 0, ar: 0 },
-  { id: 3, name: 'Inferno Fries', category: 'Sides', price: 520, status: '3D Ready', scans: 231, ar: 89 },
+  { id: 'demo-1', name: 'Neon Smash Burger', category: 'Burgers', price: 1290, status: 'ready', scans: 482, ar: 211 },
+  { id: 'demo-2', name: 'Midnight Mocha', category: 'Coffee', price: 640, status: 'queued', scans: 0, ar: 0 },
+  { id: 'demo-3', name: 'Inferno Fries', category: 'Sides', price: 520, status: 'ready', scans: 231, ar: 89 },
 ];
 
 export default function BusinessDashboard({ onBack, onOpenProduct }) {
   const [step, setStep] = useState('dashboard');
   const [products, setProducts] = useState(seedProducts);
   const [form, setForm] = useState({ name: '', price: '', category: 'Main', calories: '', protein: '', carbs: '', fat: '', tags: 'Halal, Popular' });
-  const [imageName, setImageName] = useState('');
+  const [imageFile, setImageFile] = useState(null);
   const [created, setCreated] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    getBusinessProducts('neon-bites')
+      .then(items => {
+        if (items.length) setProducts(items.map(item => ({ ...item, scans: 0, ar: 0 })));
+      })
+      .catch(() => {});
+  }, []);
 
   const totals = useMemo(() => ({
-    scans: products.reduce((n, p) => n + p.scans, 0),
-    ar: products.reduce((n, p) => n + p.ar, 0),
-    ready: products.filter(p => p.status === '3D Ready').length,
+    scans: products.reduce((n, p) => n + (p.scans || 0), 0),
+    ar: products.reduce((n, p) => n + (p.ar || 0), 0),
+    ready: products.filter(p => ['ready', '3D Ready'].includes(p.status)).length,
   }), [products]);
 
-  const addProduct = () => {
-    if (!form.name || !form.price) return;
-    const next = {
-      id: Date.now(),
-      name: form.name,
-      category: form.category,
-      price: Number(form.price),
-      status: 'Processing',
-      scans: 0,
-      ar: 0,
-      nutrition: { calories: form.calories, protein: form.protein, carbs: form.carbs, fat: form.fat },
-      tags: form.tags.split(',').map(v => v.trim()).filter(Boolean),
-      imageName,
-    };
-    setProducts(prev => [next, ...prev]);
-    setCreated(next);
-    setStep('success');
+  const addProduct = async () => {
+    if (!form.name || !form.price || !imageFile) {
+      setError('Add a product name, price and image first.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const next = await createBusinessProduct('neon-bites', form, imageFile);
+      setProducts(prev => [{ ...next, scans: 0, ar: 0 }, ...prev.filter(p => !String(p.id).startsWith('demo-'))]);
+      setCreated(next);
+      setStep('success');
+    } catch (err) {
+      setError(err.message || 'Could not create product');
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (step === 'add') {
@@ -53,16 +64,16 @@ export default function BusinessDashboard({ onBack, onOpenProduct }) {
           <div className="builder-intro">
             <span className="kicker">ONE PHOTO → 3D EXPERIENCE</span>
             <h1>Add a product.</h1>
-            <p>Upload one clean photo and the Ashes pipeline prepares the item for 3D generation, QR sharing and customer AR.</p>
+            <p>Upload one clean photo and Ashes stores it, generates a real smart QR, and queues the product for the future image-to-3D worker.</p>
           </div>
 
           <div className="builder-grid">
             <div className="upload-panel glass-panel">
               <label className="photo-dropzone">
-                <input type="file" accept="image/*" onChange={e => setImageName(e.target.files?.[0]?.name || '')} />
+                <input type="file" accept="image/*" onChange={e => setImageFile(e.target.files?.[0] || null)} />
                 <div className="upload-orb"><ImagePlus size={34} /></div>
-                <strong>{imageName || 'Upload product photo'}</strong>
-                <span>{imageName ? 'Photo selected — ready for AI processing' : 'JPG, PNG or WEBP. Clean background works best.'}</span>
+                <strong>{imageFile?.name || 'Upload product photo'}</strong>
+                <span>{imageFile ? 'Photo selected — ready for upload' : 'JPG, PNG or WEBP. Clean background works best.'}</span>
                 <div className="upload-action"><Upload size={15} /> Choose image</div>
               </label>
               <div className="ai-pipeline-strip">
@@ -86,8 +97,9 @@ export default function BusinessDashboard({ onBack, onOpenProduct }) {
                 <label><span>Fat</span><input value={form.fat} onChange={e=>setForm({...form,fat:e.target.value})} placeholder="47g" /></label>
               </div>
               <label><span>Tags</span><input value={form.tags} onChange={e => setForm({...form, tags:e.target.value})} placeholder="Halal, High Protein, Spicy" /></label>
-              <div className="ai-note"><Sparkles size={16} /><p>Later, Ashes AI can estimate nutrition and tags from the photo + recipe, then the business approves them before publishing.</p></div>
-              <button className="primary-btn wide" onClick={addProduct}>Create product & generate 3D <Sparkles size={17} /></button>
+              <div className="ai-note"><Sparkles size={16} /><p>Nutrition and allergens should remain business-approved. The AI can assist later, but Ashes should never silently publish guessed allergen data.</p></div>
+              {error && <div className="form-error">{error}</div>}
+              <button className="primary-btn wide" disabled={saving} onClick={addProduct}>{saving ? 'Uploading & creating…' : 'Create product & generate QR'} <Sparkles size={17} /></button>
             </div>
           </div>
         </section>
@@ -103,11 +115,15 @@ export default function BusinessDashboard({ onBack, onOpenProduct }) {
           <div className="success-icon"><Check size={34} /></div>
           <span className="kicker">PRODUCT CREATED</span>
           <h1>{created?.name}</h1>
-          <p>Your product is in the Ashes pipeline. When its 3D asset is ready, this QR can open the same customer experience automatically.</p>
-          <div className="qr-demo"><QrCode size={110} strokeWidth={1.2}/><span>ASH-{String(created?.id || '').slice(-6)}</span></div>
+          <p>The image is persisted in Ashes, the product record exists in the database, and this QR points to its public product URL. Its 3D job is queued for the model worker.</p>
+          <div className="qr-demo real-qr">
+            {created?.qr_url ? <img src={absoluteApiUrl(created.qr_url)} alt={`QR for ${created.name}`} /> : <QrCode size={110} strokeWidth={1.2}/>} 
+            <span>{created?.id?.slice(0, 8).toUpperCase()}</span>
+          </div>
+          <div className="public-link">{created?.public_url}</div>
           <div className="success-actions">
             <button className="secondary-btn" onClick={() => setStep('dashboard')}>Back to dashboard</button>
-            <button className="primary-btn" onClick={onOpenProduct}>Preview customer view <ScanLine size={17}/></button>
+            <button className="primary-btn" onClick={() => onOpenProduct?.(created?.id)}>Preview customer view <ScanLine size={17}/></button>
           </div>
         </section>
       </main>
@@ -141,30 +157,33 @@ export default function BusinessDashboard({ onBack, onOpenProduct }) {
             <article><span>PRODUCTS</span><strong>{products.length}</strong><em>{totals.ready} 3D ready</em></article>
             <article><span>QR SCANS</span><strong>{totals.scans.toLocaleString()}</strong><em>Lifetime</em></article>
             <article><span>AR LAUNCHES</span><strong>{totals.ar.toLocaleString()}</strong><em>{totals.scans ? Math.round(totals.ar/totals.scans*100) : 0}% of scans</em></article>
-            <article><span>PLAN</span><strong>GROWTH</strong><em>12 / 25 products</em></article>
+            <article><span>PLAN</span><strong>GROWTH</strong><em>{products.length} / 25 products</em></article>
           </div>
 
           <div className="dashboard-content-grid">
             <section className="catalog-panel glass-panel">
               <div className="panel-head"><div><span className="kicker">CATALOG</span><h2>Your experiences</h2></div><button className="text-btn" onClick={() => setStep('add')}>Add new <ChevronRight size={15}/></button></div>
               <div className="product-table">
-                {products.map(product => (
-                  <div className="product-row" key={product.id}>
-                    <div className="product-thumb"><Box size={19}/></div>
-                    <div className="product-meta"><strong>{product.name}</strong><span>{product.category} · Rs {product.price.toLocaleString()}</span></div>
-                    <span className={`status-pill ${product.status === '3D Ready' ? 'ready' : 'processing'}`}>{product.status}</span>
-                    <div className="row-metric"><strong>{product.scans}</strong><span>scans</span></div>
-                    <button className="row-action" onClick={onOpenProduct}><ChevronRight size={17}/></button>
-                  </div>
-                ))}
+                {products.map(product => {
+                  const ready = ['ready', '3D Ready'].includes(product.status);
+                  return (
+                    <div className="product-row" key={product.id}>
+                      <div className="product-thumb"><Box size={19}/></div>
+                      <div className="product-meta"><strong>{product.name}</strong><span>{product.category} · Rs {Number(product.price).toLocaleString()}</span></div>
+                      <span className={`status-pill ${ready ? 'ready' : 'processing'}`}>{ready ? '3D Ready' : product.status === 'queued' ? 'Queued' : product.status}</span>
+                      <div className="row-metric"><strong>{product.scans || 0}</strong><span>scans</span></div>
+                      <button className="row-action" onClick={() => onOpenProduct?.(product.id)}><ChevronRight size={17}/></button>
+                    </div>
+                  );
+                })}
               </div>
             </section>
 
             <aside className="qr-panel glass-panel">
-              <div className="panel-head"><div><span className="kicker">SMART QR</span><h2>Table scan</h2></div></div>
-              <div className="qr-demo large"><QrCode size={145} strokeWidth={1.15}/><span>NEONBITES-T01</span></div>
-              <p>Place this QR on a table, menu, product card or storefront. Customers enter Ashes instantly — no separate app.</p>
-              <button className="secondary-btn wide">Download QR</button>
+              <div className="panel-head"><div><span className="kicker">SMART QR</span><h2>Product-linked QR</h2></div></div>
+              <div className="qr-demo large"><QrCode size={145} strokeWidth={1.15}/><span>ASHES-SMART-QR</span></div>
+              <p>Each product created through the API now receives a real QR image pointing at its unique public URL.</p>
+              <button className="secondary-btn wide">QRs generated per product</button>
             </aside>
           </div>
         </section>
