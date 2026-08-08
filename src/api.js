@@ -12,6 +12,9 @@ export function saveSession(session) {
   if (session?.business) localStorage.setItem(BUSINESS_KEY, JSON.stringify(session.business));
   if (session?.user) localStorage.setItem(USER_KEY, JSON.stringify(session.user));
 }
+export function updateStoredBusiness(business) {
+  if (business) localStorage.setItem(BUSINESS_KEY, JSON.stringify(business));
+}
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(BUSINESS_KEY);
@@ -41,6 +44,21 @@ export async function loginBusiness(email, password) {
   saveSession(session); return session;
 }
 export async function getMe() { return apiFetch('/api/auth/me', {}, true); }
+export async function getBusinessProfile(slug) { return apiFetch(`/api/businesses/${slug}`); }
+export async function updateBusinessProfile(slug, values) {
+  const business = await apiFetch(`/api/businesses/${slug}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
+  }, true);
+  updateStoredBusiness(business);
+  return business;
+}
+export async function uploadBusinessLogo(slug, file) {
+  const form = new FormData(); form.append('logo', file);
+  const business = await apiFetch(`/api/businesses/${slug}/logo`, { method: 'POST', body: form }, true);
+  updateStoredBusiness(business);
+  return business;
+}
+export async function getProductBusiness(productId) { return apiFetch(`/api/products/${productId}/business`); }
 export async function getBusinessProducts(slug, includeUnpublished = false) {
   return apiFetch(`/api/businesses/${slug}/products${includeUnpublished ? '?include_unpublished=true' : ''}`, {}, includeUnpublished);
 }
