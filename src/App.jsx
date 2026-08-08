@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ArrowRight, Box, Camera, QrCode, ScanLine, Sparkles, Store, Utensils, Zap } from 'lucide-react';
 import ProductExperience from './ProductExperience';
 import BusinessDashboard from './BusinessDashboard';
@@ -17,10 +17,16 @@ const steps = [
 ];
 
 export default function App() {
-  const [view, setView] = useState('home');
+  const deepLinkedProductId = useMemo(() => new URLSearchParams(window.location.search).get('product'), []);
+  const [view, setView] = useState(deepLinkedProductId ? 'product' : 'home');
 
-  if (view === 'product') return <ProductExperience onBack={() => setView('home')} />;
-  if (view === 'business') return <BusinessDashboard onBack={() => setView('home')} onOpenProduct={() => setView('product')} />;
+  const goHome = () => {
+    if (window.location.search) window.history.replaceState({}, '', window.location.pathname);
+    setView('home');
+  };
+
+  if (view === 'product') return <ProductExperience onBack={goHome} productId={deepLinkedProductId || undefined} />;
+  if (view === 'business') return <BusinessDashboard onBack={goHome} onOpenProduct={() => setView('product')} />;
 
   return (
     <main className="site-shell">
