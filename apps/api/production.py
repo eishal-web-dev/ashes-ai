@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from fastapi.middleware.cors import CORSMiddleware
 
-from apps.api.mongo_main import app
+# Import the storage-aware Mongo entrypoint so production boots with the
+# persistent-media helpers registered alongside the existing API routes.
+from apps.api.storage_main import app
 from apps.api.mongo_db import database
-from apps.api.storage import build_storage
-from pathlib import Path
 
 
 def _allowed_origins() -> list[str]:
