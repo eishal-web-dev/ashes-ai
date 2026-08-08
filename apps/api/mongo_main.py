@@ -76,7 +76,10 @@ def auth_user(authorization: Optional[str] = Header(None)) -> dict:
 
 def owned_business(user_id: str, slug: str) -> dict:
     business = get_business_by_slug(slug)
-    if not business or business.get("owner_user_id") != user_id: raise HTTPException(404, "Business not found for this account")
+    if not business or business.get("owner_user_id") != user_id:
+        raise HTTPException(404, "Business not found for this account")
+    if business.get("account_status", "active") == "suspended":
+        raise HTTPException(403, "This Ashes business account is suspended")
     return business
 
 
@@ -227,76 +230,3 @@ def get_orders(business_slug:str,user:dict=Depends(auth_user)):
 @app.get("/api/businesses/{business_slug}/order-notifications")
 def order_notifications(business_slug:str,user:dict=Depends(auth_user)):
     business=owned_business(user["id"],business_slug); orders=list_unnotified_orders(business["id"]); mark_orders_notified([x["id"] for x in orders]); return orders
-
-@app.patch("/api/businesses/{business_slug}/orders/{order_id}")
-def order_status(business_slug:str,order_id:str,payload:OrderStatusPayload,user:dict=Depends(auth_user)):
-    business=owned_business(user["id"],business_slug); order=mongo_set_order_status(order_id,business["id"],payload.status)
-    if not order: raise HTTPException(404,"Order not found")
-    return order
-
-@app.get("/api/businesses/{business_slug}/table-qrs")
-def table_qrs(business_slug:str,user:dict=Depends(auth_user)):
-    business=owned_business(user["id"],business_slug); return [{**x,"qr_url":f"{API_BASE_URL}/media/qr/{Path(x['qr_path']).name}"} for x in mongo_list_table_qrs(business["id"])]
-
-@app.post("/api/businesses/{business_slug}/table-qrs")
-def add_table_qr(business_slug:str,payload:TableQrPayload,user:dict=Depends(auth_user)):
-    business=owned_business(user["id"],business_slug); code=payload.table_code.strip().upper(); public_url=f"{PUBLIC_BASE_URL}/?business={business['slug']}&table={code}"; qr_path=QR_DIR/f"table-{business['id']}-{slugify(code)}.png"; qrcode.make(public_url).save(qr_path)
-    try: row=mongo_create_table_qr({"business_id":business["id"],"table_code":code,"product_id":payload.product_id,"public_url":public_url,"qr_path":str(qr_path)})
-    except DuplicateKeyError as exc: raise HTTPException(409,"That table QR already exists") from exc
-    return {**row,"qr_url":f"{API_BASE_URL}/media/qr/{qr_path.name}"}
-
-@app.post("/api/businesses/{business_slug}/import-menu-card")
-async def import_menu_card(business_slug:str,image:UploadFile=File(...),user:dict=Depends(auth_user)):
-    business=owned_business(user["id"],business_slug); ext=Path(image.filename or "menu.jpg").suffix.lower() or ".jpg"; path=MENU_IMPORT_DIR/f"{uuid.uuid4()}{ext}"; path.write_bytes(await image.read()); imp=create_menu_import(business["id"],str(path))
-    try:
-        extracted=extract_menu(path); created=[]; skipped=[]; review=[]
-        for item in extracted.get("items") or []:
-            name=str(item.get("name") or "").strip(); category=str(item.get("category") or "Main").strip() or "Main"
-            if not name: continue
-            if find_duplicate_product(business["id"],name,category): skipped.append(name); continue
-            pid=str(uuid.uuid4()); qr=QR_DIR/f"{pid}.png"; qrcode.make(f"{PUBLIC_BASE_URL}/?product={pid}").save(qr); confidence=float(item.get("confidence") or 0)
-            row=mongo_create_product({"id":pid,"business_id":business["id"],"name":name,"category":category,"price":float(item.get("price") or 0),"tags":", ".join(item.get("tags") or []),"status":"awaiting-image","error_message":"Imported from menu card. Add a product photo to generate its 3D model.","qr_code":str(qr),"is_published":False}); created.append(row)
-            if confidence < .78 or float(item.get("price") or 0)<=0: review.append({"id":pid,"name":name,"confidence":confidence})
-        update_menu_import(imp["id"],{"status":"completed","items_found":len(created),"error_message":None}); return {"import_id":imp["id"],"status":"completed","items_found":len(created),"created_count":len(created),"duplicates_skipped":len(skipped),"needs_review":len(review),"review_items":review,"business":business_out(business),"products":[product_out(x) for x in created],"review_required":True}
-    except Exception as exc:
-        update_menu_import(imp["id"],{"status":"failed","error_message":str(exc)[:800]}); raise HTTPException(400,str(exc)) from exc
-
-@app.get("/api/businesses/{business_slug}/menu-imports")
-def menu_imports(business_slug:str,user:dict=Depends(auth_user)):
-    business=owned_business(user["id"],business_slug); return list_menu_imports(business["id"])
-
-@app.get("/api/products/{product_id}/business")
-def product_business(product_id:str):
-    product=mongo_get_product(product_id)
-    if not product or not product.get("is_published"): raise HTTPException(404,"Business not found")
-    return business_out(get_business_by_id(product["business_id"]))
-
-@app.get("/api/products/{product_id}")
-def public_product(product_id:str):
-    product=mongo_get_product(product_id)
-    if not product or not product.get("is_published"): raise HTTPException(404,"Product not found")
-    return product_out(product)
-
-@app.get("/media/uploads/{filename}")
-def media_upload(filename:str):
-    path=UPLOAD_DIR/Path(filename).name
-    if not path.exists(): raise HTTPException(404,"File not found")
-    return FileResponse(path)
-
-@app.get("/media/models/{filename}")
-def media_model(filename:str):
-    path=MODEL_DIR/Path(filename).name
-    if not path.exists(): raise HTTPException(404,"Model not found")
-    return FileResponse(path,media_type="model/gltf-binary")
-
-@app.get("/media/qr/{filename}")
-def media_qr(filename:str):
-    path=QR_DIR/Path(filename).name
-    if not path.exists(): raise HTTPException(404,"QR not found")
-    return FileResponse(path,media_type="image/png")
-
-@app.get("/media/logos/{filename}")
-def media_logo(filename:str):
-    path=LOGO_DIR/Path(filename).name
-    if not path.exists(): raise HTTPException(404,"Logo not found")
-    return FileResponse(path)
