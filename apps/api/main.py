@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -12,17 +13,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from apps.api.services.three_d import MODEL_DIR, generate_3d
+
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 QR_DIR = DATA_DIR / "qr"
 DB_PATH = DATA_DIR / "ashes.db"
 PUBLIC_BASE_URL = os.getenv("ASHES_PUBLIC_BASE_URL", "http://localhost:5173")
+API_BASE_URL = os.getenv("ASHES_API_BASE_URL", "http://localhost:8000")
 
-for directory in (DATA_DIR, UPLOAD_DIR, QR_DIR):
+for directory in (DATA_DIR, UPLOAD_DIR, QR_DIR, MODEL_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Ashes AI API", version="0.1.0")
+app = FastAPI(title="Ashes AI API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -65,12 +69,17 @@ def init_db() -> None:
               image_path TEXT,
               model_path TEXT,
               status TEXT NOT NULL DEFAULT 'queued',
+              error_message TEXT,
               qr_code TEXT,
               created_at TEXT DEFAULT CURRENT_TIMESTAMP,
               FOREIGN KEY(business_id) REFERENCES businesses(id)
             );
             """
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(products)").fetchall()}
+        if "error_message" not in columns:
+            conn.execute("ALTER TABLE products ADD COLUMN error_message TEXT")
+
         demo = conn.execute("SELECT id FROM businesses WHERE slug = ?", ("neon-bites",)).fetchone()
         if not demo:
             conn.execute(
@@ -103,6 +112,7 @@ class ProductOut(BaseModel):
     image_url: Optional[str] = None
     model_url: Optional[str] = None
     status: str
+    error_message: Optional[str] = None
     qr_url: Optional[str] = None
     public_url: str
 
@@ -120,27 +130,60 @@ def product_from_row(row: sqlite3.Row) -> ProductOut:
         carbs=row["carbs"],
         fat=row["fat"],
         tags=[x.strip() for x in (row["tags"] or "").split(",") if x.strip()],
-        image_url=f"/media/uploads/{Path(row['image_path']).name}" if row["image_path"] else None,
-        model_url=f"/media/uploads/{Path(row['model_path']).name}" if row["model_path"] else None,
+        image_url=f"{API_BASE_URL}/media/uploads/{Path(row['image_path']).name}" if row["image_path"] else None,
+        model_url=f"{API_BASE_URL}/media/models/{Path(row['model_path']).name}" if row["model_path"] else None,
         status=row["status"],
-        qr_url=f"/media/qr/{Path(row['qr_code']).name}" if row["qr_code"] else None,
+        error_message=row["error_message"],
+        qr_url=f"{API_BASE_URL}/media/qr/{Path(row['qr_code']).name}" if row["qr_code"] else None,
         public_url=public_url,
     )
 
 
-def queue_3d_generation(product_id: str, image_path: Path) -> None:
-    """Integration seam for TripoSR / Stable Fast 3D / Hunyuan3D.
+def run_generation_job(product_id: str, image_path: Path) -> None:
+    with db() as conn:
+        conn.execute(
+            "UPDATE products SET status = ?, error_message = NULL WHERE id = ?",
+            ("processing", product_id),
+        )
 
-    For now the record remains queued. A worker can later call the chosen image-to-3D
-    engine, save a GLB, then update model_path + status='ready'. Keeping this behind
-    one function means the web app does not care which model provider we use.
-    """
-    return None
+    try:
+        model_path = generate_3d(product_id, image_path)
+        if model_path:
+            with db() as conn:
+                conn.execute(
+                    "UPDATE products SET model_path = ?, status = ?, error_message = NULL WHERE id = ?",
+                    (str(model_path), "ready", product_id),
+                )
+        else:
+            with db() as conn:
+                conn.execute(
+                    "UPDATE products SET status = ?, error_message = ? WHERE id = ?",
+                    (
+                        "awaiting-generator",
+                        "No 3D generator configured. Set ASHES_3D_COMMAND or drop a matching GLB for development.",
+                        product_id,
+                    ),
+                )
+    except Exception as exc:
+        with db() as conn:
+            conn.execute(
+                "UPDATE products SET status = ?, error_message = ? WHERE id = ?",
+                ("failed", str(exc)[:600], product_id),
+            )
+
+
+def queue_3d_generation(product_id: str, image_path: Path) -> None:
+    threading.Thread(
+        target=run_generation_job,
+        args=(product_id, image_path),
+        daemon=True,
+        name=f"ashes-3d-{product_id[:8]}",
+    ).start()
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "ashes-api"}
+    return {"ok": True, "service": "ashes-api", "version": "0.2.0"}
 
 
 @app.get("/api/businesses")
@@ -237,6 +280,19 @@ async def create_product(
     return product_from_row(row)
 
 
+@app.post("/api/products/{product_id}/retry-3d", response_model=ProductOut)
+def retry_product_3d(product_id: str):
+    with db() as conn:
+        row = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if not row["image_path"]:
+        raise HTTPException(status_code=400, detail="Product has no source image")
+
+    queue_3d_generation(product_id, Path(row["image_path"]))
+    return product_from_row(row)
+
+
 @app.get("/api/products/{product_id}", response_model=ProductOut)
 def get_product(product_id: str):
     with db() as conn:
@@ -252,6 +308,14 @@ def media_upload(filename: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path)
+
+
+@app.get("/media/models/{filename}")
+def media_model(filename: str):
+    path = MODEL_DIR / Path(filename).name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Model not found")
+    return FileResponse(path, media_type="model/gltf-binary")
 
 
 @app.get("/media/qr/{filename}")
