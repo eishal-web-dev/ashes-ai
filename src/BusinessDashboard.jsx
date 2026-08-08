@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, BarChart3, Box, Building2, Camera, Check, ChefHat, ChevronRight, ImagePlus, LogOut, QrCode, ScanLine, Sparkles, Upload, Utensils } from 'lucide-react';
-import { absoluteApiUrl, clearSession, createBusinessProduct, getBusinessAnalytics, getBusinessOrders, getBusinessProducts, updateOrderStatus } from './api';
+import { ArrowLeft, BarChart3, Box, Building2, Camera, Check, ChefHat, ChevronRight, Download, ImagePlus, LogOut, Plus, QrCode, ScanLine, Sparkles, Upload, Utensils } from 'lucide-react';
+import { absoluteApiUrl, clearSession, createBusinessProduct, createTableQr, getBusinessAnalytics, getBusinessOrders, getBusinessProducts, getTableQrs, updateOrderStatus } from './api';
 
 export default function BusinessDashboard({ onBack, onOpenProduct, business, user, onLogout }) {
   const [step, setStep] = useState('dashboard');
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [tableQrs, setTableQrs] = useState([]);
+  const [tableCode, setTableCode] = useState('T01');
+  const [tableProductId, setTableProductId] = useState('');
   const [analytics, setAnalytics] = useState({ scans: 0, views_3d: 0, ar_launches: 0, products: [] });
   const [form, setForm] = useState({ name: '', price: '', category: 'Main', calories: '', protein: '', carbs: '', fat: '', tags: 'Halal, Popular' });
   const [imageFile, setImageFile] = useState(null);
@@ -17,18 +20,18 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
   const loadDashboard = async () => {
     if (!slug) return;
     try {
-      const [items, metrics, latestOrders] = await Promise.all([
+      const [items, metrics, latestOrders, qrs] = await Promise.all([
         getBusinessProducts(slug),
         getBusinessAnalytics(slug),
         getBusinessOrders(slug),
+        getTableQrs(slug),
       ]);
       const metricMap = Object.fromEntries((metrics.products || []).map(p => [p.id, p]));
       setProducts(items.map(item => ({ ...item, ...(metricMap[item.id] || {}) })));
       setAnalytics(metrics);
       setOrders(latestOrders || []);
-    } catch {
-      // Keep the dashboard usable if one service is temporarily unavailable.
-    }
+      setTableQrs(qrs || []);
+    } catch {}
   };
 
   useEffect(() => {
@@ -47,26 +50,26 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
   }), [analytics, products, orders]);
 
   const addProduct = async () => {
-    if (!form.name || !form.price || !imageFile || !slug) {
-      setError('Add a product name, price and image first.');
-      return;
-    }
+    if (!form.name || !form.price || !imageFile || !slug) { setError('Add a product name, price and image first.'); return; }
     setSaving(true); setError('');
     try {
       const next = await createBusinessProduct(slug, form, imageFile);
-      setProducts(prev => [{ ...next }, ...prev]);
-      setCreated(next);
-      setStep('success');
-      setTimeout(loadDashboard, 600);
+      setProducts(prev => [{ ...next }, ...prev]); setCreated(next); setStep('success'); setTimeout(loadDashboard, 600);
     } catch (err) { setError(err.message || 'Could not create product'); }
     finally { setSaving(false); }
   };
 
   const changeOrderStatus = async (orderId, status) => {
+    try { const updated = await updateOrderStatus(slug, orderId, status); setOrders(prev => prev.map(o => o.id === orderId ? updated : o)); } catch {}
+  };
+
+  const addTableQr = async () => {
+    if (!tableCode.trim()) return;
     try {
-      const updated = await updateOrderStatus(slug, orderId, status);
-      setOrders(prev => prev.map(o => o.id === orderId ? updated : o));
-    } catch {}
+      await createTableQr(slug, tableCode, tableProductId || null);
+      setTableCode(`T${String(tableQrs.length + 2).padStart(2, '0')}`);
+      await loadDashboard();
+    } catch (err) { setError(err.message || 'Could not create table QR'); }
   };
 
   const logout = () => { clearSession(); onLogout?.(); };
@@ -98,23 +101,26 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
 
   return (
     <main className="business-shell"><div className="noise" /><div className="dashboard-layout">
-      <aside className="business-sidebar"><div className="brand"><span>ASHES</span><b>AI</b></div><div className="business-profile"><div className="profile-logo">{initial}</div><div><strong>{business?.name || 'Your business'}</strong><span>{business?.kind || 'business'}{business?.city ? ` · ${business.city}` : ''}</span></div></div><nav className="side-nav"><button className="active"><BarChart3 size={17}/> Overview</button><button><Utensils size={17}/> Products</button><button><ChefHat size={17}/> Orders <span className="nav-count">{totals.openOrders}</span></button><button><QrCode size={17}/> QR Codes</button><button><ScanLine size={17}/> Analytics</button><button><Building2 size={17}/> Business</button></nav><button className="side-back" onClick={onBack}><ArrowLeft size={16}/> Ashes home</button><button className="side-back" onClick={logout}><LogOut size={16}/> Sign out</button></aside>
+      <aside className="business-sidebar"><div className="brand"><span>ASHES</span><b>AI</b></div><div className="business-profile"><div className="profile-logo">{initial}</div><div><strong>{business?.name || 'Your business'}</strong><span>{business?.kind || 'business'}{business?.city ? ` · ${business.city}` : ''}</span></div></div><nav className="side-nav"><button className="active"><BarChart3 size={17}/> Overview</button><button><Utensils size={17}/> Products</button><button><ChefHat size={17}/> Orders <span className="nav-count">{totals.openOrders}</span></button><button><QrCode size={17}/> QR Codes <span className="nav-count">{tableQrs.length}</span></button><button><ScanLine size={17}/> Analytics</button><button><Building2 size={17}/> Business</button></nav><button className="side-back" onClick={onBack}><ArrowLeft size={16}/> Ashes home</button><button className="side-back" onClick={logout}><LogOut size={16}/> Sign out</button></aside>
       <section className="dashboard-main"><header className="dashboard-header"><div><span className="kicker">ASHES BUSINESS OS</span><h1>Good evening, {user?.name || business?.name}.</h1><p className="dashboard-subline">Managing <strong>{business?.name}</strong> · @{business?.slug}</p></div><button className="primary-btn" onClick={() => setStep('add')}><Upload size={17}/> Add product</button></header>
-      <div className="stat-grid business-stats"><article><span>PRODUCTS</span><strong>{products.length}</strong><em>{totals.ready} 3D ready</em></article><article><span>LIVE ORDERS</span><strong>{totals.openOrders}</strong><em>Waiting / preparing</em></article><article><span>ORDER VALUE</span><strong>Rs {totals.revenue.toLocaleString()}</strong><em>Non-cancelled orders</em></article><article><span>AR LAUNCHES</span><strong>{totals.ar.toLocaleString()}</strong><em>{totals.scans ? Math.round(totals.ar/totals.scans*100) : 0}% of scans</em></article></div>
+      <div className="stat-grid business-stats"><article><span>PRODUCTS</span><strong>{products.length}</strong><em>{totals.ready} 3D ready</em></article><article><span>LIVE ORDERS</span><strong>{totals.openOrders}</strong><em>Waiting / preparing</em></article><article><span>ORDER VALUE</span><strong>Rs {totals.revenue.toLocaleString()}</strong><em>Non-cancelled orders</em></article><article><span>TABLE QRS</span><strong>{tableQrs.length}</strong><em>Printable entry points</em></article></div>
 
       <section className="orders-panel glass-panel">
         <div className="panel-head"><div><span className="kicker">LIVE KITCHEN QUEUE</span><h2>Incoming table orders</h2></div><button className="secondary-btn" onClick={loadDashboard}>Refresh</button></div>
-        <div className="orders-list">
-          {orders.length === 0 && <div className="empty-catalog">No orders yet. Customer orders from scanned product pages will appear here automatically.</div>}
-          {orders.slice(0, 8).map(order => <article className="order-card" key={order.id}>
-            <div className="order-card-top"><div><strong>#{order.id.slice(0,8).toUpperCase()}</strong><span>{order.table_code ? `Table ${order.table_code}` : 'No table'}{order.customer_name ? ` · ${order.customer_name}` : ''}</span></div><b>Rs {Number(order.total).toLocaleString()}</b></div>
-            <div className="order-items-mini">{(order.items || []).map(item => <span key={item.product_id}>{item.quantity}× {item.product_name}</span>)}</div>
-            {order.notes && <p className="order-note">“{order.notes}”</p>}
-            <div className="order-status-actions">
-              {['new','accepted','preparing','ready','served'].map(status => <button key={status} className={order.status === status ? 'active' : ''} onClick={() => changeOrderStatus(order.id, status)}>{status}</button>)}
-              <button className={order.status === 'cancelled' ? 'active danger' : 'danger'} onClick={() => changeOrderStatus(order.id, 'cancelled')}>cancel</button>
-            </div>
-          </article>)}
+        <div className="orders-list">{orders.length === 0 && <div className="empty-catalog">No orders yet. Customer orders from scanned product pages will appear here automatically.</div>}{orders.slice(0, 8).map(order => <article className="order-card" key={order.id}><div className="order-card-top"><div><strong>#{order.id.slice(0,8).toUpperCase()}</strong><span>{order.table_code ? `Table ${order.table_code}` : 'No table'}{order.customer_name ? ` · ${order.customer_name}` : ''}</span></div><b>Rs {Number(order.total).toLocaleString()}</b></div><div className="order-items-mini">{(order.items || []).map(item => <span key={item.product_id}>{item.quantity}× {item.product_name}</span>)}</div>{order.notes && <p className="order-note">“{order.notes}”</p>}<div className="order-status-actions">{['new','accepted','preparing','ready','served'].map(status => <button key={status} className={order.status === status ? 'active' : ''} onClick={() => changeOrderStatus(order.id, status)}>{status}</button>)}<button className={order.status === 'cancelled' ? 'active danger' : 'danger'} onClick={() => changeOrderStatus(order.id, 'cancelled')}>cancel</button></div></article>)}</div>
+      </section>
+
+      <section className="table-qr-panel glass-panel">
+        <div className="panel-head"><div><span className="kicker">TABLE ENTRY POINTS</span><h2>Create printable QR codes</h2></div></div>
+        <div className="table-qr-builder">
+          <label><span>Table code</span><input value={tableCode} onChange={e => setTableCode(e.target.value.toUpperCase())} placeholder="T01" /></label>
+          <label><span>Open directly to product (optional)</span><select value={tableProductId} onChange={e => setTableProductId(e.target.value)}><option value="">Table session only</option>{products.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></label>
+          <button className="primary-btn" onClick={addTableQr}><Plus size={16}/> Create table QR</button>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="table-qr-grid">
+          {tableQrs.length === 0 && <div className="empty-catalog">Create T01, T02, Counter, Patio-1, or any code the restaurant uses.</div>}
+          {tableQrs.map(qr => <article className="table-qr-card" key={qr.id}><img src={absoluteApiUrl(qr.qr_url)} alt={`QR for table ${qr.table_code}`} /><div><strong>Table {qr.table_code}</strong><span>{qr.public_url}</span><a className="secondary-btn" href={absoluteApiUrl(qr.qr_url)} download={`ashes-${business?.slug}-${qr.table_code}.png`}><Download size={15}/> Download QR</a></div></article>)}
         </div>
       </section>
 
