@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Crown, ExternalLink, Sparkles, Zap } from 'lucide-react';
-import { createBillingCheckout, devCompleteBillingCheckout, getBillingPlans, getBusinessBilling } from './api';
+import { Check, Crown, ExternalLink, ImagePlus, Sparkles, Upload, WalletCards, Zap } from 'lucide-react';
+import { createBillingCheckout, devCompleteBillingCheckout, getBillingPlans, getBusinessBilling, getBusinessManualPaymentProofs, getManualPaymentMethods, submitManualPaymentProof } from './api';
 
 const resourceLabels = {
   products: 'Products',
@@ -21,11 +21,8 @@ function moneyLabel(plan) {
   const amount = Number(plan?.price_monthly ?? plan?.price_monthly_usd ?? 0);
   const currency = String(plan?.currency || 'usd').toUpperCase();
   if (amount === 0) return '$0';
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
-  } catch {
-    return `${currency} ${amount.toFixed(2)}`;
-  }
+  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount); }
+  catch { return `${currency} ${amount.toFixed(2)}`; }
 }
 
 export default function BillingPanel({ slug }) {
@@ -34,21 +31,29 @@ export default function BillingPanel({ slug }) {
   const [provider, setProvider] = useState('manual');
   const [changing, setChanging] = useState('');
   const [pendingIntent, setPendingIntent] = useState(null);
+  const [manualMethods, setManualMethods] = useState({});
+  const [manualProofs, setManualProofs] = useState([]);
+  const [manualForm, setManualForm] = useState({ plan: 'starter', method: 'easypaisa', transaction_reference: '', note: '', receipt: null });
+  const [manualSending, setManualSending] = useState(false);
   const [error, setError] = useState('');
 
   const load = async () => {
     if (!slug) return;
     try {
-      const [snapshot, catalog] = await Promise.all([getBusinessBilling(slug), getBillingPlans()]);
+      const [snapshot, catalog, methods, proofs] = await Promise.all([
+        getBusinessBilling(slug), getBillingPlans(), getManualPaymentMethods(), getBusinessManualPaymentProofs(slug),
+      ]);
       setBilling(snapshot);
       setPlans(catalog?.plans || []);
       setProvider(catalog?.provider || snapshot?.provider || 'manual');
+      setManualMethods(methods?.methods || {});
+      setManualProofs(proofs?.proofs || []);
+      const firstMethod = Object.keys(methods?.methods || {})[0];
+      if (firstMethod) setManualForm(prev => ({ ...prev, method: firstMethod }));
       const pending = (snapshot?.checkout_intents || []).find(intent => intent.status === 'pending');
       setPendingIntent(pending || null);
       setError('');
-    } catch (err) {
-      setError(err.message || 'Could not load billing');
-    }
+    } catch (err) { setError(err.message || 'Could not load billing'); }
   };
 
   useEffect(() => { load(); }, [slug]);
@@ -56,9 +61,7 @@ export default function BillingPanel({ slug }) {
   const currentKey = billing?.plan?.key || 'free';
   const usageRows = useMemo(() => {
     if (!billing) return [];
-    return Object.entries(resourceLabels).map(([key, label]) => ({
-      key, label, value: Number(billing.usage?.[key] || 0), limit: Number(billing.limits?.[key] || 0),
-    }));
+    return Object.entries(resourceLabels).map(([key, label]) => ({ key, label, value: Number(billing.usage?.[key] || 0), limit: Number(billing.limits?.[key] || 0) }));
   }, [billing]);
 
   const choosePlan = async plan => {
@@ -82,9 +85,23 @@ export default function BillingPanel({ slug }) {
     finally { setChanging(''); }
   };
 
+  const submitManual = async () => {
+    if (!manualForm.receipt) { setError('Upload the payment receipt screenshot first.'); return; }
+    setManualSending(true); setError('');
+    try {
+      await submitManualPaymentProof(slug, manualForm);
+      setManualForm(prev => ({ ...prev, transaction_reference: '', note: '', receipt: null }));
+      const proofs = await getBusinessManualPaymentProofs(slug);
+      setManualProofs(proofs?.proofs || []);
+    } catch (err) { setError(err.message || 'Could not submit payment proof'); }
+    finally { setManualSending(false); }
+  };
+
+  const enabledManual = Object.entries(manualMethods);
+
   return <section className="billing-section glass-panel" id="billing">
     <div className="billing-heading">
-      <div><span className="kicker">ASHES SUBSCRIPTION</span><h2>Plan & usage</h2><p>Usage limits protect AI generation costs. Paid upgrades activate only after successful payment confirmation.</p></div>
+      <div><span className="kicker">ASHES SUBSCRIPTION</span><h2>Plan & usage</h2><p>Use Stripe for automatic recurring billing, or submit an Easypaisa/JazzCash receipt for admin review.</p></div>
       <div className="current-plan-badge"><Crown size={16}/><span>{billing?.plan?.name || 'Free'}</span><small>{billing?.status || 'active'}</small></div>
     </div>
 
@@ -103,10 +120,24 @@ export default function BillingPanel({ slug }) {
           <div className="plan-limits"><span>{plan.product_limit} products</span><span>{plan.ai_generations_monthly} AI generations / month</span><span>{plan.menu_imports_monthly} menu imports / month</span><span>{plan.table_qr_limit} table QRs</span></div>
           <div className="plan-features">{(plan.features || []).map(feature => <div key={feature}><Check size={14}/><span>{feature}</span></div>)}</div>
           <button className={active ? 'secondary-btn wide' : 'primary-btn wide'} disabled={active || plan.key === 'free' || changing === plan.key || pending || disabled} onClick={() => choosePlan(plan.key)}>
-            {active ? 'Current plan' : plan.key === 'free' ? 'Free tier' : disabled ? 'Plan unavailable' : pending ? 'Checkout pending' : changing === plan.key ? 'Creating checkout…' : <>Upgrade to {plan.name} <Sparkles size={15}/></>}
+            {active ? 'Current plan' : plan.key === 'free' ? 'Free tier' : disabled ? 'Plan unavailable' : pending ? 'Checkout pending' : changing === plan.key ? 'Creating checkout…' : <>Pay by Stripe <Sparkles size={15}/></>}
           </button>
         </article>;
       })}
     </div>
+
+    {enabledManual.length > 0 && <section className="manual-payment-box">
+      <div className="manual-payment-head"><div><WalletCards size={19}/><div><strong>Pay with Easypaisa / JazzCash</strong><span>Send payment to the account below, then upload the receipt screenshot. Your plan activates after admin approval.</span></div></div></div>
+      <div className="manual-payment-grid">
+        <label><span>Plan</span><select value={manualForm.plan} onChange={e=>setManualForm({...manualForm,plan:e.target.value})}><option value="starter">Starter</option><option value="pro">Pro</option></select></label>
+        <label><span>Payment method</span><select value={manualForm.method} onChange={e=>setManualForm({...manualForm,method:e.target.value})}>{enabledManual.map(([key]) => <option value={key} key={key}>{key === 'easypaisa' ? 'Easypaisa' : 'JazzCash'}</option>)}</select></label>
+        <div className="manual-account-card"><span>Send payment to</span><strong>{manualMethods[manualForm.method]?.account_title || 'Ashes AI'}</strong><b>{manualMethods[manualForm.method]?.account_number || 'Account number set by admin'}</b><small>{manualMethods[manualForm.method]?.instructions}</small></div>
+        <label><span>Transaction/reference ID</span><input value={manualForm.transaction_reference} onChange={e=>setManualForm({...manualForm,transaction_reference:e.target.value})} placeholder="e.g. TXN123456" /></label>
+        <label><span>Note (optional)</span><input value={manualForm.note} onChange={e=>setManualForm({...manualForm,note:e.target.value})} placeholder="Business/payment note" /></label>
+        <label className="receipt-upload"><span>Receipt screenshot</span><input type="file" accept="image/*" onChange={e=>setManualForm({...manualForm,receipt:e.target.files?.[0] || null})}/><div><ImagePlus size={18}/>{manualForm.receipt?.name || 'Choose receipt image'}</div></label>
+      </div>
+      <button className="primary-btn" disabled={manualSending} onClick={submitManual}><Upload size={15}/>{manualSending ? 'Submitting…' : 'Submit payment proof'}</button>
+      {manualProofs.length > 0 && <div className="manual-proof-list"><h4>Your payment proofs</h4>{manualProofs.slice(0,5).map(item => <article key={item.id}><div><strong>{item.method === 'easypaisa' ? 'Easypaisa' : 'JazzCash'} · {item.plan}</strong><span>{item.currency} {Number(item.amount || 0).toLocaleString()} · {item.transaction_reference || 'No reference'}</span></div><span className={`manual-proof-status ${item.status}`}>{item.status}</span>{item.receipt_url && <a href={item.receipt_url} target="_blank" rel="noreferrer">View receipt</a>}</article>)}</div>}
+    </section>}
   </section>;
 }
