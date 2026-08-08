@@ -58,6 +58,14 @@ export async function uploadBusinessLogo(slug, file) {
   updateStoredBusiness(business);
   return business;
 }
+export async function importMenuCard(slug, file) {
+  const form = new FormData();
+  form.append('image', file);
+  const result = await apiFetch(`/api/businesses/${slug}/import-menu-card`, { method: 'POST', body: form }, true);
+  if (result?.business) updateStoredBusiness(result.business);
+  return result;
+}
+export async function getMenuImports(slug) { return apiFetch(`/api/businesses/${slug}/menu-imports`, {}, true); }
 export async function getProductBusiness(productId) { return apiFetch(`/api/products/${productId}/business`); }
 export async function getBusinessProducts(slug, includeUnpublished = false) {
   return apiFetch(`/api/businesses/${slug}/products${includeUnpublished ? '?include_unpublished=true' : ''}`, {}, includeUnpublished);
