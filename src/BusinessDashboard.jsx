@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, BarChart3, Box, Building2, Camera, Check, ChevronRight, ImagePlus, LogOut, QrCode, ScanLine, Sparkles, Upload, Utensils } from 'lucide-react';
-import { absoluteApiUrl, clearSession, createBusinessProduct, getBusinessProducts } from './api';
+import { absoluteApiUrl, clearSession, createBusinessProduct, getBusinessAnalytics, getBusinessProducts } from './api';
 
 export default function BusinessDashboard({ onBack, onOpenProduct, business, user, onLogout }) {
   const [step, setStep] = useState('dashboard');
   const [products, setProducts] = useState([]);
+  const [analytics, setAnalytics] = useState({ scans: 0, views_3d: 0, ar_launches: 0, products: [] });
   const [form, setForm] = useState({ name: '', price: '', category: 'Main', calories: '', protein: '', carbs: '', fat: '', tags: 'Halal, Popular' });
   const [imageFile, setImageFile] = useState(null);
   const [created, setCreated] = useState(null);
@@ -12,16 +13,33 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
   const [error, setError] = useState('');
   const slug = business?.slug;
 
-  useEffect(() => {
+  const loadDashboard = async () => {
     if (!slug) return;
-    getBusinessProducts(slug).then(items => setProducts(items.map(item => ({ ...item, scans: 0, ar: 0 })))).catch(() => {});
+    try {
+      const [items, metrics] = await Promise.all([
+        getBusinessProducts(slug),
+        getBusinessAnalytics(slug),
+      ]);
+      const metricMap = Object.fromEntries((metrics.products || []).map(p => [p.id, p]));
+      setProducts(items.map(item => ({ ...item, ...(metricMap[item.id] || {}) })));
+      setAnalytics(metrics);
+    } catch {
+      // Keep the dashboard usable if analytics is temporarily unavailable.
+    }
+  };
+
+  useEffect(() => {
+    loadDashboard();
+    const timer = setInterval(loadDashboard, 10000);
+    return () => clearInterval(timer);
   }, [slug]);
 
   const totals = useMemo(() => ({
-    scans: products.reduce((n, p) => n + (p.scans || 0), 0),
-    ar: products.reduce((n, p) => n + (p.ar || 0), 0),
+    scans: analytics.scans || 0,
+    views: analytics.views_3d || 0,
+    ar: analytics.ar_launches || 0,
     ready: products.filter(p => p.status === 'ready').length,
-  }), [products]);
+  }), [analytics, products]);
 
   const addProduct = async () => {
     if (!form.name || !form.price || !imageFile || !slug) {
@@ -31,8 +49,10 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
     setSaving(true); setError('');
     try {
       const next = await createBusinessProduct(slug, form, imageFile);
-      setProducts(prev => [{ ...next, scans: 0, ar: 0 }, ...prev]);
-      setCreated(next); setStep('success');
+      setProducts(prev => [{ ...next }, ...prev]);
+      setCreated(next);
+      setStep('success');
+      setTimeout(loadDashboard, 600);
     } catch (err) { setError(err.message || 'Could not create product'); }
     finally { setSaving(false); }
   };
@@ -61,15 +81,15 @@ export default function BusinessDashboard({ onBack, onOpenProduct, business, use
   );
 
   if (step === 'success') return (
-    <main className="business-shell success-shell"><div className="noise" /><section className="success-card glass-panel"><div className="success-icon"><Check size={34} /></div><span className="kicker">PRODUCT CREATED</span><h1>{created?.name}</h1><p>Your product belongs to {business?.name}, has its own public URL and QR, and its 3D job is queued.</p><div className="qr-demo real-qr">{created?.qr_url ? <img src={absoluteApiUrl(created.qr_url)} alt={`QR for ${created.name}`} /> : <QrCode size={110} strokeWidth={1.2}/>}<span>{created?.id?.slice(0, 8).toUpperCase()}</span></div><div className="public-link">{created?.public_url}</div><div className="success-actions"><button className="secondary-btn" onClick={() => setStep('dashboard')}>Back to dashboard</button><button className="primary-btn" onClick={() => onOpenProduct?.(created?.id)}>Preview customer view <ScanLine size={17}/></button></div></section></main>
+    <main className="business-shell success-shell"><div className="noise" /><section className="success-card glass-panel"><div className="success-icon"><Check size={34} /></div><span className="kicker">PRODUCT CREATED</span><h1>{created?.name}</h1><p>Your product belongs to {business?.name}, has its own public URL and QR, and its 3D job is queued.</p><div className="qr-demo real-qr">{created?.qr_url ? <img src={absoluteApiUrl(created.qr_url)} alt={`QR for ${created.name}`} /> : <QrCode size={110} strokeWidth={1.2}/>}<span>{created?.id?.slice(0, 8).toUpperCase()}</span></div><div className="public-link">{created?.public_url}</div><div className="success-actions"><button className="secondary-btn" onClick={() => { setStep('dashboard'); loadDashboard(); }}>Back to dashboard</button><button className="primary-btn" onClick={() => onOpenProduct?.(created?.id)}>Preview customer view <ScanLine size={17}/></button></div></section></main>
   );
 
   return (
     <main className="business-shell"><div className="noise" /><div className="dashboard-layout">
       <aside className="business-sidebar"><div className="brand"><span>ASHES</span><b>AI</b></div><div className="business-profile"><div className="profile-logo">{initial}</div><div><strong>{business?.name || 'Your business'}</strong><span>{business?.kind || 'business'}{business?.city ? ` · ${business.city}` : ''}</span></div></div><nav className="side-nav"><button className="active"><BarChart3 size={17}/> Overview</button><button><Utensils size={17}/> Products</button><button><QrCode size={17}/> QR Codes</button><button><ScanLine size={17}/> Analytics</button><button><Building2 size={17}/> Business</button></nav><button className="side-back" onClick={onBack}><ArrowLeft size={16}/> Ashes home</button><button className="side-back" onClick={logout}><LogOut size={16}/> Sign out</button></aside>
       <section className="dashboard-main"><header className="dashboard-header"><div><span className="kicker">ASHES BUSINESS OS</span><h1>Good evening, {user?.name || business?.name}.</h1><p className="dashboard-subline">Managing <strong>{business?.name}</strong> · @{business?.slug}</p></div><button className="primary-btn" onClick={() => setStep('add')}><Upload size={17}/> Add product</button></header>
-      <div className="stat-grid business-stats"><article><span>PRODUCTS</span><strong>{products.length}</strong><em>{totals.ready} 3D ready</em></article><article><span>QR SCANS</span><strong>{totals.scans.toLocaleString()}</strong><em>Lifetime</em></article><article><span>AR LAUNCHES</span><strong>{totals.ar.toLocaleString()}</strong><em>{totals.scans ? Math.round(totals.ar/totals.scans*100) : 0}% of scans</em></article><article><span>PLAN</span><strong>STARTER</strong><em>{products.length} products</em></article></div>
-      <div className="dashboard-content-grid"><section className="catalog-panel glass-panel"><div className="panel-head"><div><span className="kicker">CATALOG</span><h2>Your experiences</h2></div><button className="text-btn" onClick={() => setStep('add')}>Add new <ChevronRight size={15}/></button></div><div className="product-table">{products.length === 0 && <div className="empty-catalog">No products yet. Upload the first one and Ashes will create its QR + 3D job.</div>}{products.map(product => { const ready = product.status === 'ready'; return <div className="product-row" key={product.id}><div className="product-thumb"><Box size={19}/></div><div className="product-meta"><strong>{product.name}</strong><span>{product.category} · Rs {Number(product.price).toLocaleString()}</span></div><span className={`status-pill ${ready ? 'ready' : 'processing'}`}>{ready ? '3D Ready' : product.status}</span><div className="row-metric"><strong>{product.scans || 0}</strong><span>scans</span></div><button className="row-action" onClick={() => onOpenProduct?.(product.id)}><ChevronRight size={17}/></button></div>; })}</div></section><aside className="qr-panel glass-panel"><div className="panel-head"><div><span className="kicker">SMART QR</span><h2>Tenant-linked experiences</h2></div></div><div className="qr-demo large"><QrCode size={145} strokeWidth={1.15}/><span>{(business?.slug || 'ASHES').toUpperCase()}</span></div><p>Every product created by this account receives a unique public QR connected to {business?.name}.</p><button className="secondary-btn wide">QRs generated per product</button></aside></div></section>
+      <div className="stat-grid business-stats"><article><span>PRODUCTS</span><strong>{products.length}</strong><em>{totals.ready} 3D ready</em></article><article><span>QR SCANS</span><strong>{totals.scans.toLocaleString()}</strong><em>Real customer opens</em></article><article><span>3D VIEWS</span><strong>{totals.views.toLocaleString()}</strong><em>{totals.scans ? Math.round(totals.views/totals.scans*100) : 0}% of scans</em></article><article><span>AR LAUNCHES</span><strong>{totals.ar.toLocaleString()}</strong><em>{totals.scans ? Math.round(totals.ar/totals.scans*100) : 0}% of scans</em></article></div>
+      <div className="dashboard-content-grid"><section className="catalog-panel glass-panel"><div className="panel-head"><div><span className="kicker">CATALOG</span><h2>Your experiences</h2></div><button className="text-btn" onClick={() => setStep('add')}>Add new <ChevronRight size={15}/></button></div><div className="product-table">{products.length === 0 && <div className="empty-catalog">No products yet. Upload the first one and Ashes will create its QR + 3D job.</div>}{products.map(product => { const ready = product.status === 'ready'; return <div className="product-row" key={product.id}><div className="product-thumb"><Box size={19}/></div><div className="product-meta"><strong>{product.name}</strong><span>{product.category} · Rs {Number(product.price).toLocaleString()}</span></div><span className={`status-pill ${ready ? 'ready' : 'processing'}`}>{ready ? '3D Ready' : product.status}</span><div className="row-metric"><strong>{product.scans || 0}</strong><span>scans</span></div><div className="row-metric"><strong>{product.ar_launches || 0}</strong><span>AR</span></div><button className="row-action" onClick={() => onOpenProduct?.(product.id)}><ChevronRight size={17}/></button></div>; })}</div></section><aside className="qr-panel glass-panel"><div className="panel-head"><div><span className="kicker">LIVE FUNNEL</span><h2>Scan → 3D → AR</h2></div></div><div className="analytics-funnel"><div><strong>{totals.scans}</strong><span>QR scans</span></div><i>→</i><div><strong>{totals.views}</strong><span>3D views</span></div><i>→</i><div><strong>{totals.ar}</strong><span>AR launches</span></div></div><p>These numbers now come from real product-page events, so a business can see whether customers are actually engaging with its Ashes experiences.</p><button className="secondary-btn wide" onClick={loadDashboard}>Refresh analytics</button></aside></div></section>
     </div></main>
   );
 }
