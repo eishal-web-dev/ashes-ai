@@ -27,4 +27,16 @@ services:
       - key: ASHES_MENU_VISION_MODEL
         value: gpt-5.5
       - key: ASHES_STORAGE_PROVIDER
-        value: local
+        value: r2
+      - key: ASHES_S3_BUCKET
+        sync: false
+      - key: ASHES_S3_ENDPOINT_URL
+        sync: false
+      - key: ASHES_S3_REGION
+        value: auto
+      - key: ASHES_S3_ACCESS_KEY_ID
+        sync: false
+      - key: ASHES_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: ASHES_S3_PUBLIC_BASE_URL
+        sync: false
