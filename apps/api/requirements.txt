@@ -3,3 +3,4 @@ uvicorn[standard]==0.35.0
 python-multipart==0.0.20
 qrcode[pil]==8.2
 pydantic==2.11.7
+openai>=1.0.0
