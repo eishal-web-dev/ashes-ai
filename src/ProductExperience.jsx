@@ -2,7 +2,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Float, useGLTF } from '@react-three/drei';
 import { ArrowLeft, Box, Camera, Check, Flame, Leaf, LoaderCircle, Minus, Plus, ScanLine, ShoppingBag, Sparkles, Utensils, Wheat, X } from 'lucide-react';
-import { absoluteApiUrl, createOrder, getProduct, trackProductEvent } from './api';
+import { absoluteApiUrl, createOrder, getProduct, getProductBusiness, trackProductEvent } from './api';
 
 function DemoFoodModel() {
   return (
@@ -31,6 +31,7 @@ function Stat({ icon: Icon, label, value }) {
 export default function ProductExperience({ onBack, productId: propProductId }) {
   const [mode, setMode] = useState('3d');
   const [product, setProduct] = useState(null);
+  const [business, setBusiness] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [cartOpen, setCartOpen] = useState(false);
   const [quantity, setQuantity] = useState(1);
@@ -55,11 +56,11 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
     }
     const load = async () => {
       try {
-        const data = await getProduct(productId);
-        if (!cancelled) { setProduct(data); setLoadError(''); }
+        const [data, merchant] = await Promise.all([getProduct(productId), getProductBusiness(productId)]);
+        if (!cancelled) { setProduct(data); setBusiness(merchant); setLoadError(''); }
         if (!cancelled && ['queued', 'processing'].includes(data.status)) timer = setTimeout(load, 2500);
       } catch (error) {
-        if (!cancelled) { setProduct(null); setLoadError(error?.message || 'Product could not be loaded'); }
+        if (!cancelled) { setProduct(null); setBusiness(null); setLoadError(error?.message || 'Product could not be loaded'); }
       }
     };
     load();
@@ -79,6 +80,8 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
   const modelUrl = data.model_url ? absoluteApiUrl(data.model_url) : null;
   const modelReady = data.status === 'ready' && Boolean(modelUrl);
   const total = Number(data.price || 0) * quantity;
+  const accent = business?.accent_color || '#ff2f9f';
+  const merchantInitial = (business?.name || 'A').slice(0, 1).toUpperCase();
 
   const launchAR = async () => {
     if (!modelReady || !arViewerRef.current) return;
@@ -105,11 +108,14 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
   };
 
   return (
-    <main className="product-page">
+    <main className="product-page" style={{ '--business-accent': accent }}>
       <div className="scan-grid" />
       <header className="product-topbar">
         <button className="icon-button" onClick={onBack} aria-label="Back"><ArrowLeft size={20} /></button>
-        <div className="brand-lockup"><div className="brand-mark">A</div><div><strong>ASHES AI</strong><span>LIVE EXPERIENCE</span></div></div>
+        <div className="brand-lockup">
+          <div className="brand-mark">{business?.logo_url ? <img src={absoluteApiUrl(business.logo_url)} alt={business.name}/> : merchantInitial}</div>
+          <div><strong>{business?.name || 'ASHES AI'}</strong><span>POWERED BY ASHES AI</span></div>
+        </div>
         <button className="cart-pill" onClick={() => setCartOpen(true)}><ShoppingBag size={16} /> {quantity} · Rs {total.toLocaleString()}</button>
       </header>
 
@@ -124,7 +130,7 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
           <div className="canvas-wrap">
             {mode === '3d' ? (
               <Canvas camera={{ position: [0, 0, 5.8], fov: 40 }}>
-                <ambientLight intensity={1.6} /><pointLight position={[4, 5, 4]} intensity={28} color="#ff2aa3" /><pointLight position={[-4, 1, 3]} intensity={22} color="#21e8ff" />
+                <ambientLight intensity={1.6} /><pointLight position={[4, 5, 4]} intensity={28} color={accent} /><pointLight position={[-4, 1, 3]} intensity={22} color="#21e8ff" />
                 <Suspense fallback={null}>{modelReady ? <GeneratedModel url={modelUrl} /> : <DemoFoodModel />}</Suspense>
                 <OrbitControls enablePan={false} minDistance={3.3} maxDistance={9} autoRotate autoRotateSpeed={0.7} />
               </Canvas>
@@ -138,9 +144,9 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
         </div>
 
         <aside className="product-info">
-          <div className="merchant-line"><div className="merchant-logo">A</div><div><span>Now viewing</span><strong>Ashes Partner</strong></div></div>
-          <div className="product-heading"><div className="eyebrow pink">ASHES EXPERIENCE</div><h1>{data.name}</h1><p>{processing ? 'Ashes is preparing the interactive 3D twin.' : 'Explore this product and order directly from your table.'}</p></div>
-          <div className="price-row"><strong>Rs {Number(data.price || 0).toLocaleString()}</strong><span>{tableCode ? `Table ${tableCode}` : 'Table not set'}</span></div>
+          <div className="merchant-line"><div className="merchant-logo">{business?.logo_url ? <img src={absoluteApiUrl(business.logo_url)} alt={business.name}/> : merchantInitial}</div><div><span>Now viewing</span><strong>{business?.name || 'Ashes Partner'}</strong></div></div>
+          <div className="product-heading"><div className="eyebrow pink">ASHES EXPERIENCE</div><h1>{data.name}</h1><p>{processing ? 'Ashes is preparing the interactive 3D twin.' : `Explore this product from ${business?.name || 'this business'} and order directly from your table.`}</p></div>
+          <div className="price-row"><strong>Rs {Number(data.price || 0).toLocaleString()}</strong><span>{tableCode ? `Table ${tableCode}` : business?.city || 'Table not set'}</span></div>
           <div className="stats-grid"><Stat icon={Flame} label="Calories" value={data.calories || '—'} /><Stat icon={Utensils} label="Protein" value={data.protein || '—'} /><Stat icon={Leaf} label="Carbs" value={data.carbs || '—'} /><Stat icon={Wheat} label="Fat" value={data.fat || '—'} /></div>
           <div className="tag-row">{(data.tags || []).map(tag => <span key={tag}>{tag}</span>)}</div>
           {loadError && <div className="allergen-note glass-panel"><strong>Product loading</strong><p>{loadError}</p></div>}
@@ -151,14 +157,14 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
 
       {cartOpen && <div className="cart-backdrop" onClick={() => setCartOpen(false)}>
         <aside className="order-drawer glass-panel" onClick={e => e.stopPropagation()}>
-          <div className="order-drawer-head"><div><span className="kicker">TABLE ORDER</span><h2>Your order</h2></div><button className="icon-button" onClick={() => setCartOpen(false)}><X size={18}/></button></div>
+          <div className="order-drawer-head"><div><span className="kicker">TABLE ORDER</span><h2>{business?.name || 'Your'} order</h2></div><button className="icon-button" onClick={() => setCartOpen(false)}><X size={18}/></button></div>
           {orderResult ? (
             <div className="order-success"><div className="success-icon"><Check size={28}/></div><h3>Order sent.</h3><p>Order <strong>#{orderResult.id.slice(0,8).toUpperCase()}</strong> is now in the restaurant queue.</p><div className="order-status-line"><span>Status</span><strong>{orderResult.status}</strong></div><div className="order-status-line"><span>Total</span><strong>Rs {Number(orderResult.total).toLocaleString()}</strong></div><button className="primary-btn wide" onClick={() => setCartOpen(false)}>Done</button></div>
           ) : (
             <>
               <div className="cart-product"><div><strong>{data.name}</strong><span>Rs {Number(data.price || 0).toLocaleString()} each</span></div><div className="qty-control"><button onClick={() => setQuantity(q => Math.max(1, q - 1))}><Minus size={15}/></button><strong>{quantity}</strong><button onClick={() => setQuantity(q => q + 1)}><Plus size={15}/></button></div></div>
               <label className="order-field"><span>Table number / code</span><input value={tableCode} onChange={e => setTableCode(e.target.value)} placeholder="T12" /></label>
-              <label className="order-field"><span>Your name (optional)</span><input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Eishal" /></label>
+              <label className="order-field"><span>Your name (optional)</span><input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Name" /></label>
               <label className="order-field"><span>Notes</span><textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="No onions, extra sauce…" /></label>
               <div className="order-total"><span>Total</span><strong>Rs {total.toLocaleString()}</strong></div>
               {orderError && <div className="form-error">{orderError}</div>}
