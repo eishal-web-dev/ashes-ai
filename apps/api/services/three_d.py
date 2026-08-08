@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -30,18 +31,14 @@ def _copy_existing_glb(source: Path, product_id: str) -> Optional[Path]:
 def generate_3d(product_id: str, image_path: Path) -> Optional[Path]:
     """Generate a GLB for one product image.
 
-    The worker is provider-agnostic. Set ASHES_3D_COMMAND to a local executable or
-    wrapper script that accepts three arguments: product_id, input_image, output_glb.
+    Set ASHES_3D_COMMAND to a local executable or wrapper that accepts:
+      product_id, input_image, output_glb
 
     Example:
       ASHES_3D_COMMAND="python tools/triposr_runner.py"
 
-    Ashes will run:
-      python tools/triposr_runner.py <product_id> <image_path> <output_path>
-
-    The runner can use TripoSR, Stable Fast 3D, Hunyuan3D, or another licensed
-    generator. Keeping the model runtime outside the web API prevents GPU-specific
-    dependencies from making the core API fragile.
+    The generated file is returned as a local Path. The API/storage layer is
+    responsible for persisting that file to R2/S3 when production storage is active.
     """
     copied = _copy_existing_glb(image_path, product_id)
     if copied:
@@ -52,7 +49,7 @@ def generate_3d(product_id: str, image_path: Path) -> Optional[Path]:
         return None
 
     output_path = MODEL_DIR / f"{product_id}.glb"
-    args = command.split() + [product_id, str(image_path), str(output_path)]
+    args = shlex.split(command, posix=os.name != "nt") + [product_id, str(image_path), str(output_path)]
     subprocess.run(args, check=True, timeout=int(os.getenv("ASHES_3D_TIMEOUT", "900")))
 
     if output_path.exists() and output_path.stat().st_size > 0:
