@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from apps.api.analytics_patch import business_metrics, ensure_analytics_table, product_metrics, record_event
 from apps.api.auth import decode_token, hash_password, issue_token, verify_password
 from apps.api.services.three_d import MODEL_DIR, generate_3d
 
@@ -28,7 +29,7 @@ API_BASE_URL = os.getenv("ASHES_API_BASE_URL", "http://localhost:8000")
 for directory in (DATA_DIR, UPLOAD_DIR, QR_DIR, MODEL_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Ashes AI API", version="0.3.0")
+app = FastAPI(title="Ashes AI API", version="0.4.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -93,6 +94,7 @@ def init_db() -> None:
             );
             """
         )
+        ensure_analytics_table(conn)
 
         business_columns = {row[1] for row in conn.execute("PRAGMA table_info(businesses)").fetchall()}
         if "owner_user_id" not in business_columns:
@@ -134,6 +136,10 @@ class BusinessCreate(BaseModel):
     city: Optional[str] = None
 
 
+class AnalyticsEventPayload(BaseModel):
+    event_type: str
+
+
 class ProductOut(BaseModel):
     id: str
     business_id: str
@@ -151,10 +157,15 @@ class ProductOut(BaseModel):
     error_message: Optional[str] = None
     qr_url: Optional[str] = None
     public_url: str
+    scans: int = 0
+    views_3d: int = 0
+    ar_launches: int = 0
 
 
 def product_from_row(row: sqlite3.Row) -> ProductOut:
     public_url = f"{PUBLIC_BASE_URL}/?product={row['id']}"
+    with db() as conn:
+        metrics = product_metrics(conn, row["id"])
     return ProductOut(
         id=row["id"],
         business_id=row["business_id"],
@@ -172,6 +183,7 @@ def product_from_row(row: sqlite3.Row) -> ProductOut:
         error_message=row["error_message"],
         qr_url=f"{API_BASE_URL}/media/qr/{Path(row['qr_code']).name}" if row["qr_code"] else None,
         public_url=public_url,
+        **metrics,
     )
 
 
@@ -237,7 +249,7 @@ def queue_3d_generation(product_id: str, image_path: Path) -> None:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "ashes-api", "version": "0.3.0"}
+    return {"ok": True, "service": "ashes-api", "version": "0.4.0"}
 
 
 @app.post("/api/auth/signup")
@@ -317,6 +329,41 @@ def list_products(business_slug: str):
     return [product_from_row(row) for row in rows]
 
 
+@app.get("/api/businesses/{business_slug}/analytics")
+def get_business_analytics(business_slug: str, user: sqlite3.Row = Depends(auth_user)):
+    business = owned_business(user["id"], business_slug)
+    with db() as conn:
+        totals = business_metrics(conn, business["id"])
+        rows = conn.execute(
+            """
+            SELECT p.*, 
+              SUM(CASE WHEN ae.event_type='scan' THEN 1 ELSE 0 END) AS scans,
+              SUM(CASE WHEN ae.event_type='view_3d' THEN 1 ELSE 0 END) AS views_3d,
+              SUM(CASE WHEN ae.event_type='ar_launch' THEN 1 ELSE 0 END) AS ar_launches
+            FROM products p
+            LEFT JOIN analytics_events ae ON ae.product_id=p.id
+            WHERE p.business_id=?
+            GROUP BY p.id
+            ORDER BY p.created_at DESC
+            """,
+            (business["id"],),
+        ).fetchall()
+    return {
+        "business_id": business["id"],
+        **totals,
+        "products": [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "scans": int(row["scans"] or 0),
+                "views_3d": int(row["views_3d"] or 0),
+                "ar_launches": int(row["ar_launches"] or 0),
+            }
+            for row in rows
+        ],
+    }
+
+
 @app.post("/api/businesses/{business_slug}/products", response_model=ProductOut)
 async def create_product(
     business_slug: str,
@@ -358,6 +405,20 @@ async def create_product(
 
     queue_3d_generation(product_id, image_path)
     return product_from_row(row)
+
+
+@app.post("/api/products/{product_id}/analytics")
+def add_product_analytics(product_id: str, payload: AnalyticsEventPayload):
+    with db() as conn:
+        product = conn.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone()
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        try:
+            record_event(conn, product_id, payload.event_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        metrics = product_metrics(conn, product_id)
+    return {"ok": True, "product_id": product_id, **metrics}
 
 
 @app.post("/api/products/{product_id}/retry-3d", response_model=ProductOut)
