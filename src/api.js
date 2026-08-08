@@ -127,6 +127,17 @@ export async function getBillingCheckout(slug, intentId) {
 export async function devCompleteBillingCheckout(slug, intentId) {
   return apiFetch(`/api/businesses/${slug}/billing/checkout/${intentId}/dev-complete`, { method: 'POST' }, true);
 }
+export async function getManualPaymentMethods() { return apiFetch('/api/billing/manual-methods'); }
+export async function submitManualPaymentProof(slug, values) {
+  const form = new FormData();
+  form.append('plan', values.plan);
+  form.append('method', values.method);
+  form.append('transaction_reference', values.transaction_reference || '');
+  form.append('note', values.note || '');
+  form.append('receipt', values.receipt);
+  return apiFetch(`/api/businesses/${slug}/billing/manual-proof`, { method: 'POST', body: form }, true);
+}
+export async function getBusinessManualPaymentProofs(slug) { return apiFetch(`/api/businesses/${slug}/billing/manual-proofs`, {}, true); }
 
 export async function getAdminOverview() { return apiFetch('/api/admin/overview', {}, true); }
 export async function getAdminBusiness(businessId) { return apiFetch(`/api/admin/businesses/${businessId}`, {}, true); }
@@ -140,6 +151,17 @@ export async function getAdminBilling() { return apiFetch('/api/admin/billing', 
 export async function updateAdminBillingSettings(values) {
   return apiFetch('/api/admin/billing/settings', {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
+  }, true);
+}
+export async function getAdminManualPayments() { return apiFetch('/api/admin/manual-payments', {}, true); }
+export async function updateAdminManualPaymentSettings(values) {
+  return apiFetch('/api/admin/manual-payments/settings', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
+  }, true);
+}
+export async function reviewAdminManualPayment(proofId, action, note = '') {
+  return apiFetch(`/api/admin/manual-payments/${proofId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, note }),
   }, true);
 }
 
