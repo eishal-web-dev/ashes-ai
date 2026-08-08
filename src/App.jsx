@@ -4,6 +4,7 @@ import ProductExperience from './ProductExperience';
 import BusinessDashboard from './BusinessDashboard';
 import BusinessAuth from './BusinessAuth';
 import MenuExperience from './MenuExperience';
+import AdminDashboard from './AdminDashboard';
 import { getStoredBusiness, getStoredUser, getToken } from './api';
 
 const experiences = [
@@ -24,17 +25,18 @@ export default function App() {
   const deepLinkedProductId = params.get('product');
   const tableCode = params.get('table');
   const menuBusinessSlug = params.get('business');
+  const adminPath = window.location.pathname === '/admin';
   const initialBusiness = getStoredBusiness();
   const initialUser = getStoredUser();
   const hasSession = Boolean(getToken() && initialBusiness);
-  const initialView = deepLinkedProductId ? 'product' : (tableCode && menuBusinessSlug ? 'menu' : 'home');
+  const initialView = adminPath ? 'admin' : (deepLinkedProductId ? 'product' : (tableCode && menuBusinessSlug ? 'menu' : 'home'));
   const [view, setView] = useState(initialView);
   const [business, setBusiness] = useState(initialBusiness);
   const [user, setUser] = useState(initialUser);
   const [activeProductId, setActiveProductId] = useState(deepLinkedProductId || null);
 
   const goHome = () => {
-    if (window.location.search) window.history.replaceState({}, '', window.location.pathname);
+    if (window.location.pathname === '/admin' || window.location.search) window.history.replaceState({}, '', '/');
     setActiveProductId(null);
     setView('home');
   };
@@ -44,7 +46,7 @@ export default function App() {
   const handleAuthenticated = (session) => {
     setBusiness(session.business);
     setUser(session.user);
-    setView('business');
+    setView(adminPath ? 'admin' : 'business');
   };
 
   const openProduct = (productId) => {
@@ -58,6 +60,10 @@ export default function App() {
     setView('home');
   };
 
+  if (view === 'admin') {
+    if (!getToken()) return <BusinessAuth onBack={goHome} onAuthenticated={handleAuthenticated} />;
+    return <AdminDashboard onBack={goHome} />;
+  }
   if (view === 'menu') return <MenuExperience businessSlug={menuBusinessSlug} tableCode={tableCode} onBack={goHome} onOpenProduct={openProduct} />;
   if (view === 'product') return <ProductExperience onBack={tableCode && menuBusinessSlug ? () => setView('menu') : goHome} productId={activeProductId || undefined} />;
   if (view === 'auth') return <BusinessAuth onBack={goHome} onAuthenticated={handleAuthenticated} />;
