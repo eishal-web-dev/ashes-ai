@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from apps.api.analytics_patch import business_metrics, ensure_analytics_table, product_metrics, record_event
 from apps.api.auth import decode_token, hash_password, issue_token, verify_password
+from apps.api.orders_patch import create_order as create_order_record, ensure_order_tables, get_order as get_order_record, list_business_orders
 from apps.api.services.three_d import MODEL_DIR, generate_3d
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -29,7 +30,7 @@ API_BASE_URL = os.getenv("ASHES_API_BASE_URL", "http://localhost:8000")
 for directory in (DATA_DIR, UPLOAD_DIR, QR_DIR, MODEL_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Ashes AI API", version="0.4.0")
+app = FastAPI(title="Ashes AI API", version="0.5.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -95,6 +96,7 @@ def init_db() -> None:
             """
         )
         ensure_analytics_table(conn)
+        ensure_order_tables(conn)
 
         business_columns = {row[1] for row in conn.execute("PRAGMA table_info(businesses)").fetchall()}
         if "owner_user_id" not in business_columns:
@@ -138,6 +140,22 @@ class BusinessCreate(BaseModel):
 
 class AnalyticsEventPayload(BaseModel):
     event_type: str
+
+
+class OrderItemPayload(BaseModel):
+    product_id: str
+    quantity: int = 1
+
+
+class OrderCreatePayload(BaseModel):
+    items: list[OrderItemPayload]
+    table_code: Optional[str] = None
+    customer_name: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class OrderStatusPayload(BaseModel):
+    status: str
 
 
 class ProductOut(BaseModel):
@@ -249,7 +267,7 @@ def queue_3d_generation(product_id: str, image_path: Path) -> None:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "ashes-api", "version": "0.4.0"}
+    return {"ok": True, "service": "ashes-api", "version": "0.5.0"}
 
 
 @app.post("/api/auth/signup")
@@ -364,6 +382,27 @@ def get_business_analytics(business_slug: str, user: sqlite3.Row = Depends(auth_
     }
 
 
+@app.get("/api/businesses/{business_slug}/orders")
+def get_orders(business_slug: str, user: sqlite3.Row = Depends(auth_user)):
+    business = owned_business(user["id"], business_slug)
+    with db() as conn:
+        return list_business_orders(conn, business["id"])
+
+
+@app.patch("/api/businesses/{business_slug}/orders/{order_id}")
+def update_order_status(business_slug: str, order_id: str, payload: OrderStatusPayload, user: sqlite3.Row = Depends(auth_user)):
+    business = owned_business(user["id"], business_slug)
+    allowed = {"new", "accepted", "preparing", "ready", "served", "cancelled"}
+    if payload.status not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid order status")
+    with db() as conn:
+        row = conn.execute("SELECT id FROM orders WHERE id=? AND business_id=?", (order_id, business["id"])).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Order not found")
+        conn.execute("UPDATE orders SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (payload.status, order_id))
+        return get_order_record(conn, order_id)
+
+
 @app.post("/api/businesses/{business_slug}/products", response_model=ProductOut)
 async def create_product(
     business_slug: str,
@@ -407,18 +446,41 @@ async def create_product(
     return product_from_row(row)
 
 
-@app.post("/api/products/{product_id}/analytics")
-def add_product_analytics(product_id: str, payload: AnalyticsEventPayload):
+@app.post("/api/orders")
+def create_order(payload: OrderCreatePayload):
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+    product_ids = [item.product_id for item in payload.items]
     with db() as conn:
-        product = conn.execute("SELECT id FROM products WHERE id = ?", (product_id,)).fetchone()
-        if not product:
-            raise HTTPException(status_code=404, detail="Product not found")
+        rows = conn.execute(
+            f"SELECT id, business_id FROM products WHERE id IN ({','.join(['?'] * len(product_ids))})",
+            product_ids,
+        ).fetchall()
+        if len(rows) != len(set(product_ids)):
+            raise HTTPException(status_code=400, detail="One or more products are invalid")
+        business_ids = {row["business_id"] for row in rows}
+        if len(business_ids) != 1:
+            raise HTTPException(status_code=400, detail="All cart items must belong to the same business")
         try:
-            record_event(conn, product_id, payload.event_type)
+            return create_order_record(
+                conn,
+                business_ids.pop(),
+                [item.model_dump() for item in payload.items],
+                payload.table_code,
+                payload.customer_name,
+                payload.notes,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        metrics = product_metrics(conn, product_id)
-    return {"ok": True, "product_id": product_id, **metrics}
+
+
+@app.get("/api/orders/{order_id}")
+def get_public_order(order_id: str):
+    with db() as conn:
+        order = get_order_record(conn, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
 
 
 @app.post("/api/products/{product_id}/retry-3d", response_model=ProductOut)
@@ -443,6 +505,18 @@ def get_product(product_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Product not found")
     return product_from_row(row)
+
+
+@app.post("/api/products/{product_id}/analytics")
+def track_product_event(product_id: str, payload: AnalyticsEventPayload):
+    if payload.event_type not in {"scan", "view_3d", "ar_launch"}:
+        raise HTTPException(status_code=400, detail="Unsupported analytics event")
+    with db() as conn:
+        row = conn.execute("SELECT business_id FROM products WHERE id=?", (product_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Product not found")
+        record_event(conn, row["business_id"], product_id, payload.event_type)
+    return {"ok": True}
 
 
 @app.get("/media/uploads/{filename}")
