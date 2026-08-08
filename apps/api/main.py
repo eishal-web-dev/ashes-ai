@@ -33,7 +33,7 @@ API_BASE_URL = os.getenv("ASHES_API_BASE_URL", "http://localhost:8000")
 
 for directory in (DATA_DIR, UPLOAD_DIR, QR_DIR, MODEL_DIR, LOGO_DIR, MENU_IMPORT_DIR): directory.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Ashes AI API", version="1.0.0")
+app = FastAPI(title="Ashes AI API", version="1.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 def db() -> sqlite3.Connection:
@@ -116,7 +116,7 @@ def queue_3d_generation(product_id:str,image_path:Path)->None:
     threading.Thread(target=run_generation_job,args=(product_id,image_path),daemon=True,name=f"ashes-3d-{product_id[:8]}").start()
 
 @app.get("/health")
-def health(): return {"ok":True,"service":"ashes-api","version":"1.0.0"}
+def health(): return {"ok":True,"service":"ashes-api","version":"1.1.0"}
 
 @app.post("/api/auth/signup")
 def signup(payload:SignupPayload):
@@ -204,7 +204,8 @@ async def import_menu_card(business_slug:str,image:UploadFile=File(...),user:sql
         items=extracted.get("items") or []
         if not items: raise ValueError("No menu items were detected")
         with db() as conn:
-            created_ids=import_products(conn,business["id"],items,PUBLIC_BASE_URL,QR_DIR)
+            import_result=import_products(conn,business["id"],items,PUBLIC_BASE_URL,QR_DIR)
+            created_ids=import_result["created_ids"]
             detected_business=extracted.get("business") or {}
             updates=[]; values=[]
             for field in ("phone","instagram","website","city"):
@@ -216,8 +217,22 @@ async def import_menu_card(business_slug:str,image:UploadFile=File(...),user:sql
                 values.append(business["id"]); conn.execute(f"UPDATE businesses SET {', '.join(updates)} WHERE id=?",values)
             conn.execute("UPDATE menu_imports SET status='completed',items_found=?,error_message=NULL WHERE id=?",(len(created_ids),import_id))
             profile=conn.execute("SELECT * FROM businesses WHERE id=?",(business["id"],)).fetchone()
-            rows=conn.execute(f"SELECT * FROM products WHERE id IN ({','.join(['?']*len(created_ids))}) ORDER BY created_at DESC",created_ids).fetchall()
-        return {"import_id":import_id,"status":"completed","items_found":len(created_ids),"business":business_from_row(profile),"products":[product_from_row(row) for row in rows],"review_required":True}
+            rows=[]
+            if created_ids:
+                rows=conn.execute(f"SELECT * FROM products WHERE id IN ({','.join(['?']*len(created_ids))}) ORDER BY created_at DESC",created_ids).fetchall()
+        return {
+            "import_id":import_id,
+            "status":"completed",
+            "items_detected":len(items),
+            "items_found":len(created_ids),
+            "created_count":import_result["created_count"],
+            "skipped_duplicates":import_result["skipped_duplicates"],
+            "review_items":import_result["review_items"],
+            "review_count":len(import_result["review_items"]),
+            "business":business_from_row(profile),
+            "products":[product_from_row(row) for row in rows],
+            "review_required":True,
+        }
     except Exception as exc:
         with db() as conn: conn.execute("UPDATE menu_imports SET status='failed',error_message=? WHERE id=?",(str(exc)[:800],import_id))
         raise HTTPException(status_code=400,detail=str(exc)) from exc
