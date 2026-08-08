@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowLeft, Ban, Boxes, Building2, CheckCircle2, CircleDollarSign, CreditCard, RefreshCw, RotateCcw, ShieldCheck, Sparkles, Store, TriangleAlert } from 'lucide-react';
-import { getAdminBilling, getAdminJobs, getAdminOverview, setAdminBusinessStatus } from './api';
+import { AlertTriangle, ArrowLeft, Ban, Boxes, Building2, CheckCircle2, CircleDollarSign, CreditCard, RefreshCw, RotateCcw, Save, ShieldCheck, Sparkles, Store, TriangleAlert } from 'lucide-react';
+import { getAdminBilling, getAdminJobs, getAdminOverview, setAdminBusinessStatus, updateAdminBillingSettings } from './api';
 
 function Metric({ icon: Icon, label, value, sub }) {
   return <article className="admin-metric glass-panel"><div className="admin-metric-icon"><Icon size={18}/></div><span>{label}</span><strong>{value}</strong><small>{sub}</small></article>;
@@ -9,9 +9,11 @@ function Metric({ icon: Icon, label, value, sub }) {
 export default function AdminDashboard({ onBack }) {
   const [overview, setOverview] = useState(null);
   const [jobs, setJobs] = useState([]);
-  const [billing, setBilling] = useState({ pending_checkouts: [], recent_events: [] });
+  const [billing, setBilling] = useState({ pending_checkouts: [], recent_events: [], settings: null });
+  const [billingForm, setBillingForm] = useState({ currency: 'usd', starter: { price_monthly: 29, enabled: true }, pro: { price_monthly: 79, enabled: true } });
   const [tab, setTab] = useState('businesses');
   const [busyId, setBusyId] = useState('');
+  const [savingBilling, setSavingBilling] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -19,7 +21,13 @@ export default function AdminDashboard({ onBack }) {
     setLoading(true); setError('');
     try {
       const [nextOverview, nextJobs, nextBilling] = await Promise.all([getAdminOverview(), getAdminJobs(), getAdminBilling()]);
-      setOverview(nextOverview); setJobs(nextJobs?.jobs || []); setBilling(nextBilling || { pending_checkouts: [], recent_events: [] });
+      setOverview(nextOverview); setJobs(nextJobs?.jobs || []); setBilling(nextBilling || { pending_checkouts: [], recent_events: [], settings: null });
+      const settings = nextBilling?.settings || nextOverview?.billing_settings;
+      if (settings) setBillingForm({
+        currency: settings.currency || 'usd',
+        starter: { price_monthly: Number(settings.plans?.starter?.price_monthly ?? 29), enabled: settings.plans?.starter?.enabled !== false },
+        pro: { price_monthly: Number(settings.plans?.pro?.price_monthly ?? 79), enabled: settings.plans?.pro?.enabled !== false },
+      });
     } catch (err) {
       setError(err.message || 'Could not load Ashes admin');
     } finally { setLoading(false); }
@@ -38,6 +46,16 @@ export default function AdminDashboard({ onBack }) {
       setOverview(prev => ({ ...prev, businesses: (prev?.businesses || []).map(item => item.id === business.id ? { ...item, ...updated } : item) }));
     } catch (err) { setError(err.message || 'Could not update business'); }
     finally { setBusyId(''); }
+  };
+
+  const saveBillingSettings = async () => {
+    setSavingBilling(true); setError('');
+    try {
+      const saved = await updateAdminBillingSettings(billingForm);
+      setBilling(prev => ({ ...prev, settings: saved }));
+      setOverview(prev => ({ ...prev, billing_settings: saved }));
+    } catch (err) { setError(err.message || 'Could not save billing settings'); }
+    finally { setSavingBilling(false); }
   };
 
   return <main className="admin-shell">
@@ -68,7 +86,7 @@ export default function AdminDashboard({ onBack }) {
 
       {!loading && tab === 'jobs' && <section className="admin-panel glass-panel"><div className="admin-panel-head"><div><span className="kicker">GENERATION OPERATIONS</span><h2>3D job health</h2></div><span>{jobs.length} jobs</span></div><div className="admin-job-grid">{jobs.length === 0 && <div className="admin-empty"><CheckCircle2 size={18}/> No pending or failed 3D jobs.</div>}{jobs.map(job => <article className={`admin-job-card ${job.status === 'failed' ? 'failed' : ''}`} key={`${job.product_id}-${job.status}`}><div><strong>{job.name || job.product_id}</strong><span>{job.product_id?.slice(0,8)}</span></div><span className={`admin-status ${job.status === 'failed' ? 'suspended' : 'active'}`}>{job.status}</span>{job.error_message && <p>{job.error_message}</p>}</article>)}</div></section>}
 
-      {!loading && tab === 'billing' && <section className="admin-panel glass-panel"><div className="admin-panel-head"><div><span className="kicker">MONETIZATION OPS</span><h2>Billing activity</h2></div><CircleDollarSign size={20}/></div><div className="admin-billing-grid"><div><h3>Pending checkouts</h3>{(billing.pending_checkouts || []).length === 0 && <div className="admin-empty">No pending checkouts.</div>}{(billing.pending_checkouts || []).map(item => <article className="admin-billing-row" key={item.id}><div><strong>{item.plan || item.plan_key || 'Plan'}</strong><span>{item.business_id}</span></div><span className="admin-status active">{item.status || 'pending'}</span></article>)}</div><div><h3>Recent billing events</h3>{(billing.recent_events || []).length === 0 && <div className="admin-empty">No billing events yet.</div>}{(billing.recent_events || []).map((item,index) => <article className="admin-billing-row" key={item.id || index}><div><strong>{item.type || item.event_type || 'Billing event'}</strong><span>{item.business_id || item.provider || 'Ashes'}</span></div><span>{item.created_at ? String(item.created_at).slice(0,16).replace('T',' ') : ''}</span></article>)}</div></div></section>}
+      {!loading && tab === 'billing' && <section className="admin-panel glass-panel"><div className="admin-panel-head"><div><span className="kicker">MONETIZATION OPS</span><h2>Billing & subscription pricing</h2></div><CircleDollarSign size={20}/></div><div className="admin-billing-settings"><label><span>Currency</span><input maxLength="3" value={billingForm.currency} onChange={e => setBillingForm({...billingForm,currency:e.target.value.toLowerCase()})} /></label><label><span>Starter monthly price</span><input type="number" min="0" step="0.01" value={billingForm.starter.price_monthly} onChange={e => setBillingForm({...billingForm,starter:{...billingForm.starter,price_monthly:e.target.value}})} /></label><label className="admin-toggle"><input type="checkbox" checked={billingForm.starter.enabled} onChange={e => setBillingForm({...billingForm,starter:{...billingForm.starter,enabled:e.target.checked}})} /><span>Starter enabled</span></label><label><span>Pro monthly price</span><input type="number" min="0" step="0.01" value={billingForm.pro.price_monthly} onChange={e => setBillingForm({...billingForm,pro:{...billingForm.pro,price_monthly:e.target.value}})} /></label><label className="admin-toggle"><input type="checkbox" checked={billingForm.pro.enabled} onChange={e => setBillingForm({...billingForm,pro:{...billingForm.pro,enabled:e.target.checked}})} /><span>Pro enabled</span></label><button className="primary-btn" disabled={savingBilling} onClick={saveBillingSettings}><Save size={15}/>{savingBilling ? 'Saving…' : 'Save pricing'}</button></div><p className="admin-billing-note">Stripe payments are deposited into the Stripe account that owns the backend STRIPE_SECRET_KEY. Never expose that key in the frontend.</p><div className="admin-billing-grid"><div><h3>Pending checkouts</h3>{(billing.pending_checkouts || []).length === 0 && <div className="admin-empty">No pending checkouts.</div>}{(billing.pending_checkouts || []).map(item => <article className="admin-billing-row" key={item.id}><div><strong>{item.plan || 'Plan'}</strong><span>{item.business_id}</span></div><span className="admin-status active">{item.status || 'pending'}</span></article>)}</div><div><h3>Recent billing events</h3>{(billing.recent_events || []).length === 0 && <div className="admin-empty">No billing events yet.</div>}{(billing.recent_events || []).map((item,index) => <article className="admin-billing-row" key={item.id || index}><div><strong>{item.type || item.event_type || 'Billing event'}</strong><span>{item.business_id || item.provider || 'Ashes'}</span></div><span>{item.created_at ? String(item.created_at).slice(0,16).replace('T',' ') : ''}</span></article>)}</div></div></section>}
     </section>
   </main>;
 }
