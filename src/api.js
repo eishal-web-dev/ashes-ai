@@ -54,7 +54,7 @@ export async function updateBusinessProfile(slug, values) {
 }
 export async function uploadBusinessLogo(slug, file) {
   const form = new FormData(); form.append('logo', file);
-  const business = await apiFetch(`/api/businesses/${slug}/logo`, { method: 'POST', body: form }, true);
+  const business = await apiFetch(`/api/storage/businesses/${slug}/logo`, { method: 'POST', body: form }, true);
   updateStoredBusiness(business);
   return business;
 }
@@ -91,12 +91,12 @@ export async function createBusinessProduct(slug, values, imageFile) {
   const form = new FormData();
   form.append('name', values.name); form.append('price', values.price); form.append('category', values.category || 'Main');
   form.append('calories', values.calories || ''); form.append('protein', values.protein || ''); form.append('carbs', values.carbs || ''); form.append('fat', values.fat || ''); form.append('tags', values.tags || ''); form.append('image', imageFile);
-  return apiFetch(`/api/businesses/${slug}/products`, { method: 'POST', body: form }, true);
+  return apiFetch(`/api/storage/businesses/${slug}/products`, { method: 'POST', body: form }, true);
 }
 export async function attachBusinessProductPhoto(slug, productId, imageFile) {
   const form = new FormData();
   form.append('image', imageFile);
-  return apiFetch(`/api/businesses/${slug}/products/${productId}/photo`, { method: 'POST', body: form }, true);
+  return apiFetch(`/api/storage/businesses/${slug}/products/${productId}/image`, { method: 'POST', body: form }, true);
 }
 export async function updateBusinessProduct(slug, productId, values) {
   return apiFetch(`/api/businesses/${slug}/products/${productId}`, {
@@ -104,7 +104,7 @@ export async function updateBusinessProduct(slug, productId, values) {
   }, true);
 }
 export async function deleteBusinessProduct(slug, productId) {
-  return apiFetch(`/api/businesses/${slug}/products/${productId}`, { method: 'DELETE' }, true);
+  return apiFetch(`/api/storage/businesses/${slug}/products/${productId}`, { method: 'DELETE' }, true);
 }
 export async function getOwnedProduct(slug, productId) {
   return apiFetch(`/api/businesses/${slug}/products/${productId}`, {}, true);
