@@ -67,13 +67,35 @@ export async function getMe() {
 }
 
 export async function getBusinessProducts(slug) {
-  const response = await fetch(`${API_BASE}/api/businesses/${slug}/products`);
-  if (!response.ok) throw new Error('Could not load products');
-  return response.json();
+  return apiFetch(`/api/businesses/${slug}/products`);
 }
 
 export async function getBusinessAnalytics(slug) {
   return apiFetch(`/api/businesses/${slug}/analytics`, {}, true);
+}
+
+export async function getBusinessOrders(slug) {
+  return apiFetch(`/api/businesses/${slug}/orders`, {}, true);
+}
+
+export async function updateOrderStatus(slug, orderId, status) {
+  return apiFetch(`/api/businesses/${slug}/orders/${orderId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  }, true);
+}
+
+export async function createOrder(values) {
+  return apiFetch('/api/orders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(values),
+  });
+}
+
+export async function getOrder(orderId) {
+  return apiFetch(`/api/orders/${orderId}`);
 }
 
 export async function createBusinessProduct(slug, values, imageFile) {
@@ -87,14 +109,11 @@ export async function createBusinessProduct(slug, values, imageFile) {
   form.append('fat', values.fat || '');
   form.append('tags', values.tags || '');
   form.append('image', imageFile);
-
   return apiFetch(`/api/businesses/${slug}/products`, { method: 'POST', body: form }, true);
 }
 
 export async function getProduct(productId) {
-  const response = await fetch(`${API_BASE}/api/products/${productId}`);
-  if (!response.ok) throw new Error('Product not found');
-  return response.json();
+  return apiFetch(`/api/products/${productId}`);
 }
 
 export async function trackProductEvent(productId, eventType) {
