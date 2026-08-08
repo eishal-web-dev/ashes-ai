@@ -17,6 +17,17 @@ function UsageRow({ label, value, limit }) {
   </div>;
 }
 
+function moneyLabel(plan) {
+  const amount = Number(plan?.price_monthly ?? plan?.price_monthly_usd ?? 0);
+  const currency = String(plan?.currency || 'usd').toUpperCase();
+  if (amount === 0) return '$0';
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
+  } catch {
+    return `${currency} ${amount.toFixed(2)}`;
+  }
+}
+
 export default function BillingPanel({ slug }) {
   const [billing, setBilling] = useState(null);
   const [plans, setPlans] = useState([]);
@@ -73,7 +84,7 @@ export default function BillingPanel({ slug }) {
 
   return <section className="billing-section glass-panel" id="billing">
     <div className="billing-heading">
-      <div><span className="kicker">ASHES SUBSCRIPTION</span><h2>Plan & usage</h2><p>Usage limits protect AI generation costs. Paid upgrades now create a checkout intent and only activate after payment confirmation.</p></div>
+      <div><span className="kicker">ASHES SUBSCRIPTION</span><h2>Plan & usage</h2><p>Usage limits protect AI generation costs. Paid upgrades activate only after successful payment confirmation.</p></div>
       <div className="current-plan-badge"><Crown size={16}/><span>{billing?.plan?.name || 'Free'}</span><small>{billing?.status || 'active'}</small></div>
     </div>
 
@@ -86,12 +97,13 @@ export default function BillingPanel({ slug }) {
         const active = plan.key === currentKey;
         const featured = plan.key === 'starter';
         const pending = pendingIntent?.plan === plan.key && pendingIntent?.status === 'pending';
+        const disabled = plan.enabled === false;
         return <article key={plan.key} className={`plan-card ${active ? 'active' : ''} ${featured ? 'featured' : ''}`}>
-          <div className="plan-card-top"><div><span>{plan.name}</span><strong>{plan.price_monthly_usd === 0 ? '$0' : `$${plan.price_monthly_usd}`}<small>/mo</small></strong></div>{featured && <Zap size={18}/>}</div>
+          <div className="plan-card-top"><div><span>{plan.name}</span><strong>{moneyLabel(plan)}<small>/mo</small></strong></div>{featured && <Zap size={18}/>}</div>
           <div className="plan-limits"><span>{plan.product_limit} products</span><span>{plan.ai_generations_monthly} AI generations / month</span><span>{plan.menu_imports_monthly} menu imports / month</span><span>{plan.table_qr_limit} table QRs</span></div>
           <div className="plan-features">{(plan.features || []).map(feature => <div key={feature}><Check size={14}/><span>{feature}</span></div>)}</div>
-          <button className={active ? 'secondary-btn wide' : 'primary-btn wide'} disabled={active || plan.key === 'free' || changing === plan.key || pending} onClick={() => choosePlan(plan.key)}>
-            {active ? 'Current plan' : plan.key === 'free' ? 'Free tier' : pending ? 'Checkout pending' : changing === plan.key ? 'Creating checkout…' : <>Upgrade to {plan.name} <Sparkles size={15}/></>}
+          <button className={active ? 'secondary-btn wide' : 'primary-btn wide'} disabled={active || plan.key === 'free' || changing === plan.key || pending || disabled} onClick={() => choosePlan(plan.key)}>
+            {active ? 'Current plan' : plan.key === 'free' ? 'Free tier' : disabled ? 'Plan unavailable' : pending ? 'Checkout pending' : changing === plan.key ? 'Creating checkout…' : <>Upgrade to {plan.name} <Sparkles size={15}/></>}
           </button>
         </article>;
       })}
