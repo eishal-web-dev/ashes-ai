@@ -61,7 +61,7 @@ export default function App() {
   if (view === 'menu') return <MenuExperience businessSlug={menuBusinessSlug} tableCode={tableCode} onBack={goHome} onOpenProduct={openProduct} />;
   if (view === 'product') return <ProductExperience onBack={tableCode && menuBusinessSlug ? () => setView('menu') : goHome} productId={activeProductId || undefined} />;
   if (view === 'auth') return <BusinessAuth onBack={goHome} onAuthenticated={handleAuthenticated} />;
-  if (view === 'business') return <BusinessDashboard onBack={goHome} onOpenProduct={openProduct} business={business} user={user} onLogout={logout} />;
+  if (view === 'business') return <BusinessDashboard onBack={goHome} onOpenProduct={openProduct} business={business} user={user} onLogout={logout} onBusinessUpdated={setBusiness} />;
 
   return (
     <main className="site-shell">
