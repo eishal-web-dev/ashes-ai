@@ -64,6 +64,7 @@ export async function getBusinessProducts(slug, includeUnpublished = false) {
 }
 export async function getBusinessAnalytics(slug) { return apiFetch(`/api/businesses/${slug}/analytics`, {}, true); }
 export async function getBusinessOrders(slug) { return apiFetch(`/api/businesses/${slug}/orders`, {}, true); }
+export async function getOrderNotifications(slug) { return apiFetch(`/api/businesses/${slug}/order-notifications`, {}, true); }
 export async function updateOrderStatus(slug, orderId, status) {
   return apiFetch(`/api/businesses/${slug}/orders/${orderId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) }, true);
 }
