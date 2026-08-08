@@ -30,6 +30,7 @@ def create_table_qr(
     qr_dir: Path,
     public_base_url: str,
     product_id: str | None = None,
+    business_slug: str | None = None,
 ) -> dict:
     clean_code = table_code.strip().upper()
     if not clean_code:
@@ -43,10 +44,13 @@ def create_table_qr(
         return dict(existing)
 
     qr_id = str(uuid.uuid4())
-    query = f"table={clean_code}"
+    query_parts: list[str] = []
     if product_id:
-        query = f"product={product_id}&{query}"
-    public_url = f"{public_base_url}/?{query}"
+        query_parts.append(f"product={product_id}")
+    if business_slug:
+        query_parts.append(f"business={business_slug}")
+    query_parts.append(f"table={clean_code}")
+    public_url = f"{public_base_url}/?{'&'.join(query_parts)}"
     qr_path = qr_dir / f"table-{qr_id}.png"
     qrcode.make(public_url).save(qr_path)
 
