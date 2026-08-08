@@ -3,18 +3,20 @@ from __future__ import annotations
 import os
 
 from pydantic import BaseModel
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 
 from apps.api.billing_provider import (
     billing_provider,
     complete_checkout_intent,
     create_checkout_intent,
     get_checkout_intent,
+    handle_stripe_webhook,
     list_checkout_intents,
     subscription_history,
 )
+from apps.api.billing_settings import public_plan_catalog
 from apps.api.mongo_main import PUBLIC_BASE_URL, app, auth_user, owned_business
-from apps.api.subscriptions import public_plans, subscription_snapshot
+from apps.api.subscriptions import subscription_snapshot
 
 
 class CheckoutPayload(BaseModel):
@@ -25,7 +27,7 @@ class CheckoutPayload(BaseModel):
 
 @app.get("/api/billing/plans")
 def billing_plans():
-    return {"plans": public_plans(), "provider": billing_provider()}
+    return {"plans": public_plan_catalog(), "provider": billing_provider()}
 
 
 @app.get("/api/businesses/{business_slug}/billing")
@@ -75,3 +77,17 @@ def dev_complete_business_checkout(business_slug: str, intent_id: str, user: dic
         return complete_checkout_intent(intent_id, provider_session_id=f"dev_{intent_id[:12]}")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/billing/stripe/webhook", include_in_schema=False)
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    if not signature:
+        raise HTTPException(status_code=400, detail="Missing Stripe signature")
+    try:
+        return handle_stripe_webhook(payload, signature)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid Stripe webhook") from exc
