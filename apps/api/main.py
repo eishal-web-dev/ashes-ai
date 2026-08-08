@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from apps.api.analytics_patch import business_metrics, ensure_analytics_table, product_metrics, record_event
 from apps.api.auth import decode_token, hash_password, issue_token, verify_password
+from apps.api.menu_import import extract_menu, import_products
 from apps.api.orders_patch import create_order as create_order_record, ensure_order_tables, get_order as get_order_record, list_business_orders, list_unnotified_orders, mark_orders_notified, set_order_status
 from apps.api.services.three_d import MODEL_DIR, generate_3d
 from apps.api.table_qr_patch import create_table_qr, ensure_table_qr_table, list_table_qrs
@@ -25,13 +26,14 @@ DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 QR_DIR = DATA_DIR / "qr"
 LOGO_DIR = DATA_DIR / "logos"
+MENU_IMPORT_DIR = DATA_DIR / "menu-imports"
 DB_PATH = DATA_DIR / "ashes.db"
 PUBLIC_BASE_URL = os.getenv("ASHES_PUBLIC_BASE_URL", "http://localhost:5173")
 API_BASE_URL = os.getenv("ASHES_API_BASE_URL", "http://localhost:8000")
 
-for directory in (DATA_DIR, UPLOAD_DIR, QR_DIR, MODEL_DIR, LOGO_DIR): directory.mkdir(parents=True, exist_ok=True)
+for directory in (DATA_DIR, UPLOAD_DIR, QR_DIR, MODEL_DIR, LOGO_DIR, MENU_IMPORT_DIR): directory.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Ashes AI API", version="0.9.0")
+app = FastAPI(title="Ashes AI API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 def db() -> sqlite3.Connection:
@@ -47,6 +49,7 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,name TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS businesses (id TEXT PRIMARY KEY,owner_user_id TEXT,name TEXT NOT NULL,slug TEXT UNIQUE NOT NULL,kind TEXT NOT NULL DEFAULT 'restaurant',city TEXT,phone TEXT,instagram TEXT,website TEXT,accent_color TEXT DEFAULT '#ff2f9f',logo_path TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(owner_user_id) REFERENCES users(id));
         CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY,business_id TEXT NOT NULL,name TEXT NOT NULL,category TEXT,price REAL NOT NULL,calories TEXT,protein TEXT,carbs TEXT,fat TEXT,tags TEXT,image_path TEXT,model_path TEXT,status TEXT NOT NULL DEFAULT 'queued',error_message TEXT,qr_code TEXT,is_published INTEGER NOT NULL DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(business_id) REFERENCES businesses(id));
+        CREATE TABLE IF NOT EXISTS menu_imports (id TEXT PRIMARY KEY,business_id TEXT NOT NULL,image_path TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'processing',items_found INTEGER NOT NULL DEFAULT 0,error_message TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(business_id) REFERENCES businesses(id));
         """)
         ensure_analytics_table(conn); ensure_order_tables(conn); ensure_table_qr_table(conn)
         business_columns={row[1] for row in conn.execute("PRAGMA table_info(businesses)").fetchall()}
@@ -60,24 +63,17 @@ def init_db() -> None:
 
 init_db()
 
-class SignupPayload(BaseModel):
-    owner_name:str; email:str; password:str; business_name:str; kind:str="restaurant"; city:Optional[str]=None
-class LoginPayload(BaseModel):
-    email:str; password:str
-class BusinessCreate(BaseModel):
-    name:str; slug:Optional[str]=None; kind:str="restaurant"; city:Optional[str]=None
-class BusinessUpdatePayload(BaseModel):
-    name:Optional[str]=None; kind:Optional[str]=None; city:Optional[str]=None; phone:Optional[str]=None; instagram:Optional[str]=None; website:Optional[str]=None; accent_color:Optional[str]=None
+class SignupPayload(BaseModel): owner_name:str; email:str; password:str; business_name:str; kind:str="restaurant"; city:Optional[str]=None
+class LoginPayload(BaseModel): email:str; password:str
+class BusinessCreate(BaseModel): name:str; slug:Optional[str]=None; kind:str="restaurant"; city:Optional[str]=None
+class BusinessUpdatePayload(BaseModel): name:Optional[str]=None; kind:Optional[str]=None; city:Optional[str]=None; phone:Optional[str]=None; instagram:Optional[str]=None; website:Optional[str]=None; accent_color:Optional[str]=None
 class AnalyticsEventPayload(BaseModel): event_type:str
 class OrderItemPayload(BaseModel): product_id:str; quantity:int=1
-class OrderCreatePayload(BaseModel):
-    items:list[OrderItemPayload]; table_code:Optional[str]=None; customer_name:Optional[str]=None; notes:Optional[str]=None
+class OrderCreatePayload(BaseModel): items:list[OrderItemPayload]; table_code:Optional[str]=None; customer_name:Optional[str]=None; notes:Optional[str]=None
 class OrderStatusPayload(BaseModel): status:str
 class TableQrPayload(BaseModel): table_code:str; product_id:Optional[str]=None
-class ProductUpdatePayload(BaseModel):
-    name:Optional[str]=None; category:Optional[str]=None; price:Optional[float]=None; calories:Optional[str]=None; protein:Optional[str]=None; carbs:Optional[str]=None; fat:Optional[str]=None; tags:Optional[str]=None; is_published:Optional[bool]=None
-class ProductOut(BaseModel):
-    id:str; business_id:str; name:str; category:Optional[str]=None; price:float; calories:Optional[str]=None; protein:Optional[str]=None; carbs:Optional[str]=None; fat:Optional[str]=None; tags:list[str]=[]; image_url:Optional[str]=None; model_url:Optional[str]=None; status:str; error_message:Optional[str]=None; qr_url:Optional[str]=None; public_url:str; scans:int=0; views_3d:int=0; ar_launches:int=0; is_published:bool=False
+class ProductUpdatePayload(BaseModel): name:Optional[str]=None; category:Optional[str]=None; price:Optional[float]=None; calories:Optional[str]=None; protein:Optional[str]=None; carbs:Optional[str]=None; fat:Optional[str]=None; tags:Optional[str]=None; is_published:Optional[bool]=None
+class ProductOut(BaseModel): id:str; business_id:str; name:str; category:Optional[str]=None; price:float; calories:Optional[str]=None; protein:Optional[str]=None; carbs:Optional[str]=None; fat:Optional[str]=None; tags:list[str]=[]; image_url:Optional[str]=None; model_url:Optional[str]=None; status:str; error_message:Optional[str]=None; qr_url:Optional[str]=None; public_url:str; scans:int=0; views_3d:int=0; ar_launches:int=0; is_published:bool=False
 
 def business_from_row(row: sqlite3.Row) -> dict:
     data=dict(row); data["logo_url"]=f"{API_BASE_URL}/media/logos/{Path(row['logo_path']).name}" if row["logo_path"] else None; data.pop("logo_path",None); return data
@@ -120,7 +116,7 @@ def queue_3d_generation(product_id:str,image_path:Path)->None:
     threading.Thread(target=run_generation_job,args=(product_id,image_path),daemon=True,name=f"ashes-3d-{product_id[:8]}").start()
 
 @app.get("/health")
-def health(): return {"ok":True,"service":"ashes-api","version":"0.9.0"}
+def health(): return {"ok":True,"service":"ashes-api","version":"1.0.0"}
 
 @app.post("/api/auth/signup")
 def signup(payload:SignupPayload):
@@ -195,6 +191,43 @@ async def upload_business_logo(business_slug:str,logo:UploadFile=File(...),user:
         conn.execute("UPDATE businesses SET logo_path=? WHERE id=?",(str(path),business["id"])); row=conn.execute("SELECT * FROM businesses WHERE id=?",(business["id"],)).fetchone()
     return business_from_row(row)
 
+@app.post("/api/businesses/{business_slug}/import-menu-card")
+async def import_menu_card(business_slug:str,image:UploadFile=File(...),user:sqlite3.Row=Depends(auth_user)):
+    business=owned_business(user["id"],business_slug)
+    if not image.content_type or not image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400,detail="Menu card must be an image")
+    import_id=str(uuid.uuid4()); extension=Path(image.filename or "menu.jpg").suffix.lower() or ".jpg"; image_path=MENU_IMPORT_DIR/f"{import_id}{extension}"; image_path.write_bytes(await image.read())
+    with db() as conn:
+        conn.execute("INSERT INTO menu_imports (id,business_id,image_path,status) VALUES (?,?,?,'processing')",(import_id,business["id"],str(image_path)))
+    try:
+        extracted=extract_menu(image_path)
+        items=extracted.get("items") or []
+        if not items: raise ValueError("No menu items were detected")
+        with db() as conn:
+            created_ids=import_products(conn,business["id"],items,PUBLIC_BASE_URL,QR_DIR)
+            detected_business=extracted.get("business") or {}
+            updates=[]; values=[]
+            for field in ("phone","instagram","website","city"):
+                value=(detected_business.get(field) or "").strip()
+                if value and not business[field]: updates.append(f"{field}=?"); values.append(value)
+            detected_name=(detected_business.get("name") or "").strip()
+            if detected_name and (not business["name"] or business["name"].lower() in {"my business","your business"}): updates.append("name=?"); values.append(detected_name)
+            if updates:
+                values.append(business["id"]); conn.execute(f"UPDATE businesses SET {', '.join(updates)} WHERE id=?",values)
+            conn.execute("UPDATE menu_imports SET status='completed',items_found=?,error_message=NULL WHERE id=?",(len(created_ids),import_id))
+            profile=conn.execute("SELECT * FROM businesses WHERE id=?",(business["id"],)).fetchone()
+            rows=conn.execute(f"SELECT * FROM products WHERE id IN ({','.join(['?']*len(created_ids))}) ORDER BY created_at DESC",created_ids).fetchall()
+        return {"import_id":import_id,"status":"completed","items_found":len(created_ids),"business":business_from_row(profile),"products":[product_from_row(row) for row in rows],"review_required":True}
+    except Exception as exc:
+        with db() as conn: conn.execute("UPDATE menu_imports SET status='failed',error_message=? WHERE id=?",(str(exc)[:800],import_id))
+        raise HTTPException(status_code=400,detail=str(exc)) from exc
+
+@app.get("/api/businesses/{business_slug}/menu-imports")
+def get_menu_imports(business_slug:str,user:sqlite3.Row=Depends(auth_user)):
+    business=owned_business(user["id"],business_slug)
+    with db() as conn: rows=conn.execute("SELECT id,status,items_found,error_message,created_at FROM menu_imports WHERE business_id=? ORDER BY created_at DESC LIMIT 20",(business["id"],)).fetchall()
+    return [dict(row) for row in rows]
+
 @app.get("/api/businesses/{business_slug}/products",response_model=list[ProductOut])
 def list_products(business_slug:str,include_unpublished:bool=False,authorization:Optional[str]=Header(None)):
     with db() as conn:
@@ -210,7 +243,8 @@ def list_products(business_slug:str,include_unpublished:bool=False,authorization
 def get_business_analytics(business_slug:str,user:sqlite3.Row=Depends(auth_user)):
     business=owned_business(user["id"],business_slug)
     with db() as conn:
-        totals=business_metrics(conn,business["id"]); rows=conn.execute("SELECT p.*, SUM(CASE WHEN ae.event_type='scan' THEN 1 ELSE 0 END) AS scans, SUM(CASE WHEN ae.event_type='view_3d' THEN 1 ELSE 0 END) AS views_3d, SUM(CASE WHEN ae.event_type='ar_launch' THEN 1 ELSE 0 END) AS ar_launches FROM products p LEFT JOIN analytics_events ae ON ae.product_id=p.id WHERE p.business_id=? GROUP BY p.id ORDER BY p.created_at DESC",(business["id"],)).fetchall()
+        totals=business_metrics(conn,business["id"])
+        rows=conn.execute("SELECT p.*, SUM(CASE WHEN ae.event_type='scan' THEN 1 ELSE 0 END) AS scans, SUM(CASE WHEN ae.event_type='view_3d' THEN 1 ELSE 0 END) AS views_3d, SUM(CASE WHEN ae.event_type='ar_launch' THEN 1 ELSE 0 END) AS ar_launches FROM products p LEFT JOIN analytics_events ae ON ae.product_id=p.id WHERE p.business_id=? GROUP BY p.id ORDER BY p.created_at DESC",(business["id"],)).fetchall()
     return {"business_id":business["id"],**totals,"products":[{"id":row["id"],"name":row["name"],"scans":int(row["scans"] or 0),"views_3d":int(row["views_3d"] or 0),"ar_launches":int(row["ar_launches"] or 0)} for row in rows]}
 
 @app.get("/api/businesses/{business_slug}/orders")
@@ -330,6 +364,13 @@ def retry_product_3d(product_id:str,user:sqlite3.Row=Depends(auth_user)):
     if not row: raise HTTPException(status_code=404,detail="Product not found")
     if not row["image_path"]: raise HTTPException(status_code=400,detail="Product has no source image")
     queue_3d_generation(product_id,Path(row["image_path"])); return product_from_row(row)
+
+@app.get("/api/products/{product_id}/business")
+def get_product_business(product_id:str):
+    with db() as conn:
+        row=conn.execute("SELECT b.* FROM businesses b JOIN products p ON p.business_id=b.id WHERE p.id=? AND p.is_published=1",(product_id,)).fetchone()
+    if not row: raise HTTPException(status_code=404,detail="Business not found")
+    return business_from_row(row)
 
 @app.get("/api/products/{product_id}",response_model=ProductOut)
 def get_product(product_id:str):
