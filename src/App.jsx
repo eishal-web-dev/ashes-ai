@@ -3,6 +3,7 @@ import { ArrowRight, Box, Camera, QrCode, ScanLine, Sparkles, Store, Utensils, Z
 import ProductExperience from './ProductExperience';
 import BusinessDashboard from './BusinessDashboard';
 import BusinessAuth from './BusinessAuth';
+import MenuExperience from './MenuExperience';
 import { getStoredBusiness, getStoredUser, getToken } from './api';
 
 const experiences = [
@@ -19,11 +20,15 @@ const steps = [
 ];
 
 export default function App() {
-  const deepLinkedProductId = useMemo(() => new URLSearchParams(window.location.search).get('product'), []);
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const deepLinkedProductId = params.get('product');
+  const tableCode = params.get('table');
+  const menuBusinessSlug = params.get('business');
   const initialBusiness = getStoredBusiness();
   const initialUser = getStoredUser();
   const hasSession = Boolean(getToken() && initialBusiness);
-  const [view, setView] = useState(deepLinkedProductId ? 'product' : 'home');
+  const initialView = deepLinkedProductId ? 'product' : (tableCode && menuBusinessSlug ? 'menu' : 'home');
+  const [view, setView] = useState(initialView);
   const [business, setBusiness] = useState(initialBusiness);
   const [user, setUser] = useState(initialUser);
   const [activeProductId, setActiveProductId] = useState(deepLinkedProductId || null);
@@ -53,7 +58,8 @@ export default function App() {
     setView('home');
   };
 
-  if (view === 'product') return <ProductExperience onBack={goHome} productId={activeProductId || undefined} />;
+  if (view === 'menu') return <MenuExperience businessSlug={menuBusinessSlug} tableCode={tableCode} onBack={goHome} onOpenProduct={openProduct} />;
+  if (view === 'product') return <ProductExperience onBack={tableCode && menuBusinessSlug ? () => setView('menu') : goHome} productId={activeProductId || undefined} />;
   if (view === 'auth') return <BusinessAuth onBack={goHome} onAuthenticated={handleAuthenticated} />;
   if (view === 'business') return <BusinessDashboard onBack={goHome} onOpenProduct={openProduct} business={business} user={user} onLogout={logout} />;
 
