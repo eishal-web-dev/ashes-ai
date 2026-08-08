@@ -72,6 +72,10 @@ export async function getBusinessProducts(slug) {
   return response.json();
 }
 
+export async function getBusinessAnalytics(slug) {
+  return apiFetch(`/api/businesses/${slug}/analytics`, {}, true);
+}
+
 export async function createBusinessProduct(slug, values, imageFile) {
   const form = new FormData();
   form.append('name', values.name);
@@ -91,6 +95,15 @@ export async function getProduct(productId) {
   const response = await fetch(`${API_BASE}/api/products/${productId}`);
   if (!response.ok) throw new Error('Product not found');
   return response.json();
+}
+
+export async function trackProductEvent(productId, eventType) {
+  if (!productId) return null;
+  return apiFetch(`/api/products/${productId}/analytics`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ event_type: eventType }),
+  });
 }
 
 export function absoluteApiUrl(path) {
