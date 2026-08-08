@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -8,11 +9,12 @@ from pathlib import Path
 from typing import Optional
 
 import qrcode
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from apps.api.auth import decode_token, hash_password, issue_token, verify_password
 from apps.api.services.three_d import MODEL_DIR, generate_3d
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,7 +28,7 @@ API_BASE_URL = os.getenv("ASHES_API_BASE_URL", "http://localhost:8000")
 for directory in (DATA_DIR, UPLOAD_DIR, QR_DIR, MODEL_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Ashes AI API", version="0.2.0")
+app = FastAPI(title="Ashes AI API", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,17 +44,32 @@ def db() -> sqlite3.Connection:
     return conn
 
 
+def slugify(value: str) -> str:
+    value = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
+    return value or f"business-{uuid.uuid4().hex[:6]}"
+
+
 def init_db() -> None:
     with db() as conn:
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS users (
+              id TEXT PRIMARY KEY,
+              email TEXT UNIQUE NOT NULL,
+              password_hash TEXT NOT NULL,
+              name TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS businesses (
               id TEXT PRIMARY KEY,
+              owner_user_id TEXT,
               name TEXT NOT NULL,
               slug TEXT UNIQUE NOT NULL,
               kind TEXT NOT NULL DEFAULT 'restaurant',
               city TEXT,
-              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY(owner_user_id) REFERENCES users(id)
             );
 
             CREATE TABLE IF NOT EXISTS products (
@@ -76,8 +93,13 @@ def init_db() -> None:
             );
             """
         )
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(products)").fetchall()}
-        if "error_message" not in columns:
+
+        business_columns = {row[1] for row in conn.execute("PRAGMA table_info(businesses)").fetchall()}
+        if "owner_user_id" not in business_columns:
+            conn.execute("ALTER TABLE businesses ADD COLUMN owner_user_id TEXT")
+
+        product_columns = {row[1] for row in conn.execute("PRAGMA table_info(products)").fetchall()}
+        if "error_message" not in product_columns:
             conn.execute("ALTER TABLE products ADD COLUMN error_message TEXT")
 
         demo = conn.execute("SELECT id FROM businesses WHERE slug = ?", ("neon-bites",)).fetchone()
@@ -91,9 +113,23 @@ def init_db() -> None:
 init_db()
 
 
+class SignupPayload(BaseModel):
+    owner_name: str
+    email: str
+    password: str
+    business_name: str
+    kind: str = "restaurant"
+    city: Optional[str] = None
+
+
+class LoginPayload(BaseModel):
+    email: str
+    password: str
+
+
 class BusinessCreate(BaseModel):
     name: str
-    slug: str
+    slug: Optional[str] = None
     kind: str = "restaurant"
     city: Optional[str] = None
 
@@ -139,13 +175,43 @@ def product_from_row(row: sqlite3.Row) -> ProductOut:
     )
 
 
+def auth_user(authorization: Optional[str] = Header(None)) -> sqlite3.Row:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user_id = decode_token(authorization.split(" ", 1)[1].strip())
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    with db() as conn:
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+def owned_business(user_id: str, business_slug: str) -> sqlite3.Row:
+    with db() as conn:
+        business = conn.execute(
+            "SELECT * FROM businesses WHERE slug = ? AND owner_user_id = ?",
+            (business_slug, user_id),
+        ).fetchone()
+    if not business:
+        raise HTTPException(status_code=404, detail="Business not found for this account")
+    return business
+
+
+def unique_slug(conn: sqlite3.Connection, name: str) -> str:
+    base = slugify(name)
+    candidate = base
+    n = 2
+    while conn.execute("SELECT 1 FROM businesses WHERE slug = ?", (candidate,)).fetchone():
+        candidate = f"{base}-{n}"
+        n += 1
+    return candidate
+
+
 def run_generation_job(product_id: str, image_path: Path) -> None:
     with db() as conn:
-        conn.execute(
-            "UPDATE products SET status = ?, error_message = NULL WHERE id = ?",
-            ("processing", product_id),
-        )
-
+        conn.execute("UPDATE products SET status = ?, error_message = NULL WHERE id = ?", ("processing", product_id))
     try:
         model_path = generate_3d(product_id, image_path)
         if model_path:
@@ -158,53 +224,87 @@ def run_generation_job(product_id: str, image_path: Path) -> None:
             with db() as conn:
                 conn.execute(
                     "UPDATE products SET status = ?, error_message = ? WHERE id = ?",
-                    (
-                        "awaiting-generator",
-                        "No 3D generator configured. Set ASHES_3D_COMMAND or drop a matching GLB for development.",
-                        product_id,
-                    ),
+                    ("awaiting-generator", "No 3D generator configured. Set ASHES_3D_COMMAND or drop a matching GLB for development.", product_id),
                 )
     except Exception as exc:
         with db() as conn:
-            conn.execute(
-                "UPDATE products SET status = ?, error_message = ? WHERE id = ?",
-                ("failed", str(exc)[:600], product_id),
-            )
+            conn.execute("UPDATE products SET status = ?, error_message = ? WHERE id = ?", ("failed", str(exc)[:600], product_id))
 
 
 def queue_3d_generation(product_id: str, image_path: Path) -> None:
-    threading.Thread(
-        target=run_generation_job,
-        args=(product_id, image_path),
-        daemon=True,
-        name=f"ashes-3d-{product_id[:8]}",
-    ).start()
+    threading.Thread(target=run_generation_job, args=(product_id, image_path), daemon=True, name=f"ashes-3d-{product_id[:8]}").start()
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "ashes-api", "version": "0.2.0"}
+    return {"ok": True, "service": "ashes-api", "version": "0.3.0"}
+
+
+@app.post("/api/auth/signup")
+def signup(payload: SignupPayload):
+    email = payload.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Enter a valid email")
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    user_id = str(uuid.uuid4())
+    business_id = str(uuid.uuid4())
+    with db() as conn:
+        if conn.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
+            raise HTTPException(status_code=409, detail="Account already exists")
+        slug = unique_slug(conn, payload.business_name)
+        conn.execute(
+            "INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)",
+            (user_id, email, hash_password(payload.password), payload.owner_name.strip()),
+        )
+        conn.execute(
+            "INSERT INTO businesses (id, owner_user_id, name, slug, kind, city) VALUES (?, ?, ?, ?, ?, ?)",
+            (business_id, user_id, payload.business_name.strip(), slug, payload.kind, payload.city),
+        )
+        business = conn.execute("SELECT * FROM businesses WHERE id = ?", (business_id,)).fetchone()
+
+    return {"token": issue_token(user_id), "user": {"id": user_id, "email": email, "name": payload.owner_name}, "business": dict(business)}
+
+
+@app.post("/api/auth/login")
+def login(payload: LoginPayload):
+    email = payload.email.strip().lower()
+    with db() as conn:
+        user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        if not user or not verify_password(payload.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        business = conn.execute("SELECT * FROM businesses WHERE owner_user_id = ? ORDER BY created_at LIMIT 1", (user["id"],)).fetchone()
+    return {"token": issue_token(user["id"]), "user": {"id": user["id"], "email": user["email"], "name": user["name"]}, "business": dict(business) if business else None}
+
+
+@app.get("/api/auth/me")
+def me(user: sqlite3.Row = Depends(auth_user)):
+    with db() as conn:
+        businesses = conn.execute("SELECT * FROM businesses WHERE owner_user_id = ? ORDER BY created_at", (user["id"],)).fetchall()
+    return {"user": {"id": user["id"], "email": user["email"], "name": user["name"]}, "businesses": [dict(x) for x in businesses]}
 
 
 @app.get("/api/businesses")
 def list_businesses():
     with db() as conn:
-        rows = conn.execute("SELECT * FROM businesses ORDER BY created_at DESC").fetchall()
+        rows = conn.execute("SELECT id, name, slug, kind, city, created_at FROM businesses ORDER BY created_at DESC").fetchall()
     return [dict(row) for row in rows]
 
 
 @app.post("/api/businesses")
-def create_business(payload: BusinessCreate):
+def create_business(payload: BusinessCreate, user: sqlite3.Row = Depends(auth_user)):
     business_id = str(uuid.uuid4())
-    try:
-        with db() as conn:
-            conn.execute(
-                "INSERT INTO businesses (id, name, slug, kind, city) VALUES (?, ?, ?, ?, ?)",
-                (business_id, payload.name, payload.slug, payload.kind, payload.city),
-            )
-    except sqlite3.IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Business slug already exists") from exc
-    return {"id": business_id, **payload.model_dump()}
+    with db() as conn:
+        slug = slugify(payload.slug or payload.name)
+        if conn.execute("SELECT 1 FROM businesses WHERE slug = ?", (slug,)).fetchone():
+            slug = unique_slug(conn, payload.name)
+        conn.execute(
+            "INSERT INTO businesses (id, owner_user_id, name, slug, kind, city) VALUES (?, ?, ?, ?, ?, ?)",
+            (business_id, user["id"], payload.name, slug, payload.kind, payload.city),
+        )
+        row = conn.execute("SELECT * FROM businesses WHERE id = ?", (business_id,)).fetchone()
+    return dict(row)
 
 
 @app.get("/api/businesses/{business_slug}/products", response_model=list[ProductOut])
@@ -213,10 +313,7 @@ def list_products(business_slug: str):
         business = conn.execute("SELECT id FROM businesses WHERE slug = ?", (business_slug,)).fetchone()
         if not business:
             raise HTTPException(status_code=404, detail="Business not found")
-        rows = conn.execute(
-            "SELECT * FROM products WHERE business_id = ? ORDER BY created_at DESC",
-            (business["id"],),
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM products WHERE business_id = ? ORDER BY created_at DESC", (business["id"],)).fetchall()
     return [product_from_row(row) for row in rows]
 
 
@@ -232,12 +329,9 @@ async def create_product(
     fat: str = Form(""),
     tags: str = Form(""),
     image: UploadFile = File(...),
+    user: sqlite3.Row = Depends(auth_user),
 ):
-    with db() as conn:
-        business = conn.execute("SELECT id FROM businesses WHERE slug = ?", (business_slug,)).fetchone()
-        if not business:
-            raise HTTPException(status_code=404, detail="Business not found")
-
+    business = owned_business(user["id"], business_slug)
     if not image.content_type or not image.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Upload must be an image")
 
@@ -258,21 +352,7 @@ async def create_product(
               tags, image_path, status, qr_code
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                product_id,
-                business["id"],
-                name,
-                category,
-                price,
-                calories,
-                protein,
-                carbs,
-                fat,
-                tags,
-                str(image_path),
-                "queued",
-                str(qr_path),
-            ),
+            (product_id, business["id"], name, category, price, calories, protein, carbs, fat, tags, str(image_path), "queued", str(qr_path)),
         )
         row = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
 
@@ -281,14 +361,16 @@ async def create_product(
 
 
 @app.post("/api/products/{product_id}/retry-3d", response_model=ProductOut)
-def retry_product_3d(product_id: str):
+def retry_product_3d(product_id: str, user: sqlite3.Row = Depends(auth_user)):
     with db() as conn:
-        row = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+        row = conn.execute(
+            "SELECT p.* FROM products p JOIN businesses b ON b.id=p.business_id WHERE p.id = ? AND b.owner_user_id = ?",
+            (product_id, user["id"]),
+        ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Product not found")
     if not row["image_path"]:
         raise HTTPException(status_code=400, detail="Product has no source image")
-
     queue_3d_generation(product_id, Path(row["image_path"]))
     return product_from_row(row)
 
