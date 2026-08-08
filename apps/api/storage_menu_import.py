@@ -14,6 +14,7 @@ from apps.api.mongo_db import (
     find_duplicate_product,
     update_menu_import,
 )
+from apps.api.subscriptions import assert_capacity, increment_usage
 
 
 def _tmp_path(suffix: str) -> Path:
@@ -33,12 +34,17 @@ async def storage_import_menu_card(
     if not image.content_type or not image.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Menu card must be an image")
 
+    try:
+        assert_capacity(business["id"], "menu_imports")
+    except ValueError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+
     ext = Path(image.filename or "menu.jpg").suffix.lower() or ".jpg"
     temp_path = _tmp_path(ext)
     temp_path.write_bytes(await image.read())
+    provisional = None
 
     try:
-        # Persist original source card first so the import remains auditable after redeploys.
         provisional = create_menu_import(business["id"], "pending")
         storage_key = store_media(
             API_BASE_URL,
@@ -73,6 +79,12 @@ async def storage_import_menu_card(
                 skipped.append(name)
                 continue
 
+            try:
+                assert_capacity(business["id"], "products", len(created) + 1)
+            except ValueError:
+                review.append({"name": name, "reason": "Plan product limit reached"})
+                continue
+
             confidence = float(raw.get("confidence") or 1)
             tags = raw.get("tags") or ""
             if isinstance(tags, list):
@@ -90,6 +102,7 @@ async def storage_import_menu_card(
             if confidence < 0.75:
                 review.append({"name": name, "reason": "Low AI confidence", "confidence": confidence})
 
+        increment_usage(business["id"], "menu_imports")
         update_menu_import(
             provisional["id"],
             {
@@ -109,10 +122,13 @@ async def storage_import_menu_card(
             "review_required": True,
         }
     except Exception as exc:
-        try:
-            update_menu_import(provisional["id"], {"status": "failed", "error_message": str(exc)[:800]})
-        except Exception:
-            pass
+        if provisional:
+            try:
+                update_menu_import(provisional["id"], {"status": "failed", "error_message": str(exc)[:800]})
+            except Exception:
+                pass
+        if isinstance(exc, HTTPException):
+            raise
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         temp_path.unlink(missing_ok=True)
