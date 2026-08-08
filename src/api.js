@@ -41,7 +41,9 @@ export async function loginBusiness(email, password) {
   saveSession(session); return session;
 }
 export async function getMe() { return apiFetch('/api/auth/me', {}, true); }
-export async function getBusinessProducts(slug) { return apiFetch(`/api/businesses/${slug}/products`); }
+export async function getBusinessProducts(slug, includeUnpublished = false) {
+  return apiFetch(`/api/businesses/${slug}/products${includeUnpublished ? '?include_unpublished=true' : ''}`, {}, includeUnpublished);
+}
 export async function getBusinessAnalytics(slug) { return apiFetch(`/api/businesses/${slug}/analytics`, {}, true); }
 export async function getBusinessOrders(slug) { return apiFetch(`/api/businesses/${slug}/orders`, {}, true); }
 export async function updateOrderStatus(slug, orderId, status) {
@@ -63,6 +65,17 @@ export async function createBusinessProduct(slug, values, imageFile) {
   form.append('name', values.name); form.append('price', values.price); form.append('category', values.category || 'Main');
   form.append('calories', values.calories || ''); form.append('protein', values.protein || ''); form.append('carbs', values.carbs || ''); form.append('fat', values.fat || ''); form.append('tags', values.tags || ''); form.append('image', imageFile);
   return apiFetch(`/api/businesses/${slug}/products`, { method: 'POST', body: form }, true);
+}
+export async function updateBusinessProduct(slug, productId, values) {
+  return apiFetch(`/api/businesses/${slug}/products/${productId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
+  }, true);
+}
+export async function deleteBusinessProduct(slug, productId) {
+  return apiFetch(`/api/businesses/${slug}/products/${productId}`, { method: 'DELETE' }, true);
+}
+export async function getOwnedProduct(slug, productId) {
+  return apiFetch(`/api/businesses/${slug}/products/${productId}`, {}, true);
 }
 export async function getProduct(productId) { return apiFetch(`/api/products/${productId}`); }
 export async function trackProductEvent(productId, eventType) {
