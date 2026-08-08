@@ -127,6 +127,17 @@ export async function getBillingCheckout(slug, intentId) {
 export async function devCompleteBillingCheckout(slug, intentId) {
   return apiFetch(`/api/businesses/${slug}/billing/checkout/${intentId}/dev-complete`, { method: 'POST' }, true);
 }
+
+export async function getAdminOverview() { return apiFetch('/api/admin/overview', {}, true); }
+export async function getAdminBusiness(businessId) { return apiFetch(`/api/admin/businesses/${businessId}`, {}, true); }
+export async function setAdminBusinessStatus(businessId, action) {
+  return apiFetch(`/api/admin/businesses/${businessId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
+  }, true);
+}
+export async function getAdminJobs() { return apiFetch('/api/admin/jobs', {}, true); }
+export async function getAdminBilling() { return apiFetch('/api/admin/billing', {}, true); }
+
 export function absoluteApiUrl(path) {
   if (!path) return null;
   if (/^https?:\/\//i.test(path)) return path;
