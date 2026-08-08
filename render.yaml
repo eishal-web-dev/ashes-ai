@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: ashes-api
+    runtime: python
+    rootDir: .
+    buildCommand: pip install -r apps/api/requirements.txt
+    startCommand: uvicorn apps.api.mongo_main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: ashes_ai
+      - key: ASHES_PUBLIC_BASE_URL
+        sync: false
+      - key: ASHES_API_BASE_URL
+        sync: false
+      - key: ASHES_ALLOWED_ORIGINS
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ASHES_MENU_IMPORT_PROVIDER
+        value: openai
+      - key: ASHES_MENU_VISION_MODEL
+        value: gpt-5.5
+      - key: ASHES_STORAGE_PROVIDER
+        value: local
