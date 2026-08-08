@@ -3,6 +3,7 @@ from __future__ import annotations
 import mimetypes
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 import qrcode
@@ -21,9 +22,9 @@ from apps.api.mongo_main import (
     mongo_update_product,
     owned_business,
     product_out,
-    queue_3d_generation,
     update_business,
 )
+from apps.api.services.three_d import generate_3d
 
 
 def _tmp_path(suffix: str) -> Path:
@@ -88,6 +89,56 @@ def remove_product_media(product: dict) -> None:
         delete_media(API_BASE_URL, product.get(field))
 
 
+def _run_storage_generation_job(product_id: str, business_id: str, image_path: Path) -> None:
+    """Generate a GLB locally, persist it to configured storage, then mark ready."""
+    mongo_update_product(product_id, business_id, {"status": "processing", "error_message": None})
+    try:
+        model_path = generate_3d(product_id, image_path)
+        if not model_path:
+            mongo_update_product(
+                product_id,
+                business_id,
+                {"status": "awaiting-generator", "error_message": "No 3D generator configured."},
+            )
+            return
+
+        model_key = store_media(
+            API_BASE_URL,
+            model_path,
+            _media_key("models", business_id, f"{product_id}.glb"),
+            "model/gltf-binary",
+        )
+        product = mongo_get_product(product_id)
+        old_model = product.get("model_path") if product else None
+        mongo_update_product(
+            product_id,
+            business_id,
+            {"model_path": model_key, "status": "ready", "error_message": None},
+        )
+        if old_model and old_model != model_key:
+            delete_media(API_BASE_URL, old_model)
+    except Exception as exc:
+        mongo_update_product(
+            product_id,
+            business_id,
+            {"status": "failed", "error_message": str(exc)[:600]},
+        )
+    finally:
+        try:
+            image_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def queue_storage_3d_generation(product_id: str, business_id: str, image_path: Path) -> None:
+    threading.Thread(
+        target=_run_storage_generation_job,
+        args=(product_id, business_id, image_path),
+        daemon=True,
+        name=f"ashes-storage-3d-{product_id[:8]}",
+    ).start()
+
+
 @app.post("/api/storage/businesses/{business_slug}/logo")
 async def storage_upload_logo(
     business_slug: str,
@@ -140,6 +191,7 @@ async def storage_create_product(
     ext = Path(image.filename or "product.jpg").suffix.lower() or ".jpg"
     temp_image = _tmp_path(ext)
     temp_qr = _tmp_path(".png")
+    generation_started = False
     try:
         temp_image.write_bytes(await image.read())
         qrcode.make(f"{PUBLIC_BASE_URL}/?product={product_id}").save(temp_qr)
@@ -171,16 +223,13 @@ async def storage_create_product(
             "qr_code": qr_key,
             "is_published": False,
         })
-        # 3D providers currently consume a local file, so generation receives the
-        # temporary upload and persists its GLB after generation via storage helpers.
-        queue_3d_generation(product_id, temp_image)
+        queue_storage_3d_generation(product_id, business["id"], temp_image)
+        generation_started = True
         return storage_product_out(row)
-    except Exception:
-        raise
     finally:
-        # Delay cleanup because the current 3D worker starts in a background thread.
-        # Local upload copies used by the worker are cleaned by deployment lifecycle.
         temp_qr.unlink(missing_ok=True)
+        if not generation_started:
+            temp_image.unlink(missing_ok=True)
 
 
 @app.post("/api/storage/businesses/{business_slug}/products/{product_id}/image")
@@ -199,26 +248,32 @@ async def storage_attach_product_image(
 
     ext = Path(image.filename or "product.jpg").suffix.lower() or ".jpg"
     temp_path = _tmp_path(ext)
-    temp_path.write_bytes(await image.read())
-    old_image = product.get("image_path")
-    old_model = product.get("model_path")
-    key = store_media(
-        API_BASE_URL,
-        temp_path,
-        _media_key("products", business["id"], f"{product_id}{ext}"),
-        image.content_type,
-    )
-    row = mongo_update_product(
-        product_id,
-        business["id"],
-        {"image_path": key, "model_path": None, "status": "queued", "error_message": None},
-    )
-    if old_image and old_image != key:
-        delete_media(API_BASE_URL, old_image)
-    if old_model:
-        delete_media(API_BASE_URL, old_model)
-    queue_3d_generation(product_id, temp_path)
-    return storage_product_out(row)
+    generation_started = False
+    try:
+        temp_path.write_bytes(await image.read())
+        old_image = product.get("image_path")
+        old_model = product.get("model_path")
+        key = store_media(
+            API_BASE_URL,
+            temp_path,
+            _media_key("products", business["id"], f"{product_id}{ext}"),
+            image.content_type,
+        )
+        row = mongo_update_product(
+            product_id,
+            business["id"],
+            {"image_path": key, "model_path": None, "status": "queued", "error_message": None},
+        )
+        if old_image and old_image != key:
+            delete_media(API_BASE_URL, old_image)
+        if old_model:
+            delete_media(API_BASE_URL, old_model)
+        queue_storage_3d_generation(product_id, business["id"], temp_path)
+        generation_started = True
+        return storage_product_out(row)
+    finally:
+        if not generation_started:
+            temp_path.unlink(missing_ok=True)
 
 
 @app.delete("/api/storage/businesses/{business_slug}/products/{product_id}")
