@@ -112,6 +112,13 @@ export async function trackProductEvent(productId, eventType) {
   if (!productId) return null;
   return apiFetch(`/api/products/${productId}/analytics`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event_type: eventType }) });
 }
+export async function getBillingPlans() { return apiFetch('/api/billing/plans'); }
+export async function getBusinessBilling(slug) { return apiFetch(`/api/businesses/${slug}/billing`, {}, true); }
+export async function changeBusinessPlan(slug, plan) {
+  return apiFetch(`/api/businesses/${slug}/billing/plan`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }),
+  }, true);
+}
 export function absoluteApiUrl(path) {
   if (!path) return null;
   if (/^https?:\/\//i.test(path)) return path;
