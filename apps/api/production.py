@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from apps.api.storage_main import app
 import apps.api.storage_menu_import  # noqa: F401
 import apps.api.billing  # noqa: F401
+import apps.api.admin  # noqa: F401
 from apps.api.mongo_db import database
 
 
