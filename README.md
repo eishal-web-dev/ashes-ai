@@ -14,38 +14,39 @@ Businesses join Ashes AI, create a storefront, upload a product or menu photo, a
 - Multi-tenant business profiles
 - Restaurant / café / retail support
 - Product and menu item management
-- One-photo upload workflow
+- AI menu-card import
+- One-photo product upload workflow
 - 3D asset status and GLB support
 - QR code generation
 - Public QR landing pages
 - Interactive 3D viewer
 - AR-ready viewer architecture
 - Nutrition fields for food items
-- Calories, protein, carbs, fats, allergens and ingredients
 - Business dashboard
-- Pricing/subscription-ready architecture
+- Multi-item ordering and live order status
+- Analytics
 - PWA-first customer experience
 
 ## Core customer flow
 
 1. Scan an Ashes QR code.
-2. Open the business/product instantly in the browser.
-3. View the product in 3D.
-4. Launch AR where the device supports it.
-5. See price, ingredients, nutrition, allergens and product details.
-6. Continue to order or purchase.
+2. Open the business/menu instantly in the browser.
+3. Browse products and add multiple items to a cart.
+4. View products in interactive 3D.
+5. Launch AR where the device supports it.
+6. Place a table order and follow its live status.
 
 ## Core business flow
 
 1. Create a business account.
-2. Add restaurant, café, store or brand.
-3. Add products/menu items.
-4. Upload one primary product photo.
-5. Generate or attach a `.glb` 3D asset.
-6. Review AI-generated product information.
-7. Generate a QR code.
-8. Place the QR on tables, menus, packaging or store displays.
-9. View scans and engagement from the Ashes dashboard.
+2. Upload an existing menu card or add products manually.
+3. Review AI-created draft menu items.
+4. Attach clean product photos.
+5. Generate 3D assets.
+6. Review and publish products.
+7. Generate table/product QR codes.
+8. Receive and manage live orders.
+9. View scans, AR launches, and engagement analytics.
 
 ## Architecture
 
@@ -56,77 +57,80 @@ Customer Phone
      v
 Ashes PWA / Web App
      |
-     +--> Business storefront
-     +--> Product/menu details
-     +--> 3D/AR viewer
+     +--> Business storefront / full menu
+     +--> Cart + ordering
+     +--> Product 3D / AR viewer
      |
      v
-Ashes API
+Ashes FastAPI API
      |
      +--> Authentication
      +--> Multi-tenant businesses
-     +--> Products/menu items
-     +--> QR links
-     +--> Nutrition metadata
-     +--> Orders (later)
-     +--> Analytics (later)
-     |
+     +--> Products / menu imports
+     +--> Orders / table QR codes
+     +--> Analytics
      +--> Image-to-3D service
      |
-     v
-Database + Object Storage
+     +--> MongoDB
+     +--> S3-compatible object storage (production)
 ```
 
-## Proposed stack
+## Stack
 
-- **Frontend:** React + Vite + TypeScript
+- **Frontend:** React + Vite
 - **PWA:** Vite PWA
-- **3D/AR:** `<model-viewer>` first, Three.js / WebXR where needed
+- **3D/AR:** `<model-viewer>`, Three.js / WebXR where needed
 - **Backend:** FastAPI
-- **Database:** PostgreSQL
-- **Object storage:** S3-compatible storage
-- **Auth:** JWT/session-based auth
-- **QR:** server-generated links and QR images
-- **3D generation:** provider-agnostic adapter so we can test TripoSR, Stable Fast 3D, Hunyuan3D or an external API without rewriting the product
+- **Database:** MongoDB / MongoDB Atlas
+- **Object storage:** local filesystem in development; S3-compatible storage such as Cloudflare R2 in production
+- **Auth:** signed bearer tokens
+- **QR:** server-generated QR images and deep links
+- **Menu AI:** configurable vision provider, including an OpenAI image-input adapter
+- **3D generation:** provider-agnostic adapter for TripoSR, Stable Fast 3D, Hunyuan3D or an external API
+
+## MongoDB backend
+
+The official backend entrypoint is:
+
+```bash
+uvicorn apps.api.mongo_main:app --host 0.0.0.0 --port 8000
+```
+
+Environment:
+
+```env
+MONGODB_URI=mongodb://localhost:27017
+MONGODB_DB=ashes_ai
+```
+
+Use a MongoDB Atlas connection URI in production. See `docs/mongodb-setup.md`.
 
 ## Multi-tenant model
 
 ```text
 Ashes AI
 ├── Business A
-│   ├── Branches
 │   ├── Products / Menu Items
-│   └── QR Codes
+│   ├── Orders
+│   ├── Table QR Codes
+│   └── Analytics
 ├── Business B
 │   ├── Products
-│   └── QR Codes
+│   └── Orders
 └── Business C
 ```
 
-Every record is scoped by `business_id`, so Ashes can support hundreds or thousands of businesses inside the same platform.
+Every business-owned document is scoped by `business_id`.
 
-## Repository layout
+## Important product rules
 
-```text
-ashes-ai/
-├── apps/
-│   ├── web/              # React PWA
-│   └── api/              # FastAPI backend
-├── packages/
-│   ├── shared/           # Shared schemas/types
-│   └── ar-viewer/        # Reusable 3D/AR viewer logic
-├── services/
-│   └── image-to-3d/      # Provider abstraction + generation workers
-├── docs/
-│   ├── architecture.md
-│   └── roadmap.md
-└── README.md
-```
+- AI-imported menu information is created as **draft data** and must be reviewed before publishing.
+- Nutrition generated by AI must be labelled as an estimate unless verified by the business.
+- Allergens must be confirmed by the business and should never be silently guessed.
+- Backend order totals are recalculated from stored product prices rather than trusted from the customer client.
 
-## Important product rule
+## Development status
 
-AI-generated nutrition and allergen information must be treated as an estimate until confirmed by the business. Businesses should review and approve generated data before publishing.
+Ashes has a MongoDB-backed MVP path with business auth, catalog management, AI menu import, product-photo-to-3D workflow, QR/table sessions, ordering, analytics, branding, notifications, and PWA support.
 
-## Status
-
-🚧 MVP foundation in progress.
+Runtime/device/GPU behavior still needs end-to-end validation before production launch.
