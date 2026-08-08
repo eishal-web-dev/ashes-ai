@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
+from apps.api.billing_settings import get_billing_settings, update_billing_settings
 from apps.api.mongo_main import app, auth_user
 from apps.api.mongo_db import clean_doc, clean_docs, collection
 from apps.api.subscriptions import subscription_snapshot
@@ -25,6 +26,17 @@ def require_admin(user: dict = Depends(auth_user)) -> dict:
 
 class BusinessAdminPayload(BaseModel):
     action: str
+
+
+class BillingPlanAdminPayload(BaseModel):
+    price_monthly: float | None = None
+    enabled: bool | None = None
+
+
+class BillingSettingsAdminPayload(BaseModel):
+    currency: str
+    starter: BillingPlanAdminPayload
+    pro: BillingPlanAdminPayload
 
 
 def _business_summary(business: dict[str, Any]) -> dict[str, Any]:
@@ -69,7 +81,7 @@ def admin_overview(_: dict = Depends(require_admin)):
     total_orders = int(collection("orders").count_documents({}))
     failed_3d = int(collection("products").count_documents({"status": "failed"}))
     pending_3d = int(collection("products").count_documents({"status": {"$in": ["queued", "processing", "awaiting-generator"]}}))
-    pending_checkouts = int(collection("billing_checkouts").count_documents({"status": "pending"}))
+    pending_checkouts = int(collection("billing_checkout_intents").count_documents({"status": "pending"}))
     paid_businesses = int(collection("businesses").count_documents({"plan": {"$in": ["starter", "pro"]}, "subscription_status": "active"}))
 
     revenue_pipeline = [
@@ -99,6 +111,7 @@ def admin_overview(_: dict = Depends(require_admin)):
         },
         "plans": plan_counts,
         "businesses": [_business_summary(b) for b in businesses[:100]],
+        "billing_settings": get_billing_settings(),
     }
 
 
@@ -112,7 +125,7 @@ def admin_business_detail(business_id: str, _: dict = Depends(require_admin)):
         "products": clean_docs(collection("products").find({"business_id": business_id}).sort("created_at", -1).limit(100)),
         "orders": clean_docs(collection("orders").find({"business_id": business_id}).sort("created_at", -1).limit(100)),
         "menu_imports": clean_docs(collection("menu_imports").find({"business_id": business_id}).sort("created_at", -1).limit(30)),
-        "billing_checkouts": clean_docs(collection("billing_checkouts").find({"business_id": business_id}).sort("created_at", -1).limit(30)),
+        "billing_checkouts": clean_docs(collection("billing_checkout_intents").find({"business_id": business_id}).sort("created_at", -1).limit(30)),
         "billing_events": clean_docs(collection("billing_events").find({"business_id": business_id}).sort("created_at", -1).limit(50)),
     }
 
@@ -159,6 +172,21 @@ def admin_jobs(_: dict = Depends(require_admin)):
 @app.get("/api/admin/billing")
 def admin_billing(_: dict = Depends(require_admin)):
     return {
-        "pending_checkouts": clean_docs(collection("billing_checkouts").find({"status": "pending"}).sort("created_at", -1).limit(100)),
+        "settings": get_billing_settings(),
+        "pending_checkouts": clean_docs(collection("billing_checkout_intents").find({"status": "pending"}).sort("created_at", -1).limit(100)),
         "recent_events": clean_docs(collection("billing_events").find({}).sort("created_at", -1).limit(100)),
     }
+
+
+@app.patch("/api/admin/billing/settings")
+def admin_update_billing_settings(payload: BillingSettingsAdminPayload, _: dict = Depends(require_admin)):
+    try:
+        return update_billing_settings(
+            payload.currency,
+            {
+                "starter": payload.starter.model_dump(exclude_none=True),
+                "pro": payload.pro.model_dump(exclude_none=True),
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
