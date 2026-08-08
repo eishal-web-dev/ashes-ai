@@ -93,6 +93,11 @@ export async function createBusinessProduct(slug, values, imageFile) {
   form.append('calories', values.calories || ''); form.append('protein', values.protein || ''); form.append('carbs', values.carbs || ''); form.append('fat', values.fat || ''); form.append('tags', values.tags || ''); form.append('image', imageFile);
   return apiFetch(`/api/businesses/${slug}/products`, { method: 'POST', body: form }, true);
 }
+export async function attachBusinessProductPhoto(slug, productId, imageFile) {
+  const form = new FormData();
+  form.append('image', imageFile);
+  return apiFetch(`/api/businesses/${slug}/products/${productId}/photo`, { method: 'POST', body: form }, true);
+}
 export async function updateBusinessProduct(slug, productId, values) {
   return apiFetch(`/api/businesses/${slug}/products/${productId}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
