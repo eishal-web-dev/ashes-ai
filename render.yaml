@@ -42,3 +42,11 @@ services:
         sync: false
       - key: ASHES_S3_PUBLIC_BASE_URL
         sync: false
+      - key: ASHES_BILLING_PROVIDER
+        value: stripe
+      - key: ASHES_ALLOW_DEV_BILLING
+        value: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
