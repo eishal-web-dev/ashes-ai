@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import mimetypes
 import os
 import tempfile
 from pathlib import Path
 
-from fastapi import File, HTTPException, UploadFile
+import qrcode
+from fastapi import Depends, File, HTTPException, UploadFile
 
 from apps.api.media_storage import delete_media, media_url, store_media
 from apps.api.mongo_main import (
     API_BASE_URL,
     PUBLIC_BASE_URL,
     app,
+    auth_user,
     business_out,
+    mongo_create_product,
+    mongo_delete_product,
     mongo_get_product,
     mongo_update_product,
     owned_business,
@@ -21,7 +26,7 @@ from apps.api.mongo_main import (
 )
 
 
-def _tmp_file(upload: UploadFile, suffix: str) -> Path:
+def _tmp_path(suffix: str) -> Path:
     handle = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     path = Path(handle.name)
     handle.close()
@@ -29,8 +34,11 @@ def _tmp_file(upload: UploadFile, suffix: str) -> Path:
 
 
 def _media_key(kind: str, owner_id: str, filename: str) -> str:
-    safe = Path(filename).name
-    return f"{kind}/{owner_id}/{safe}"
+    return f"{kind}/{owner_id}/{Path(filename).name}"
+
+
+def _content_type(filename: str, fallback: str) -> str:
+    return mimetypes.guess_type(filename)[0] or fallback
 
 
 def storage_business_out(row: dict) -> dict:
@@ -47,22 +55,29 @@ def storage_product_out(row: dict) -> dict:
     return data
 
 
-@app.post("/api/storage/businesses/{business_slug}/logo")
-async def storage_upload_logo(business_slug: str, logo: UploadFile = File(...), user: dict = None):
-    # This route is intentionally a compatibility helper for deployment validation.
-    # The authenticated primary logo route remains in mongo_main until the full route
-    # swap is completed after runtime testing.
-    raise HTTPException(status_code=501, detail="Use the primary business logo endpoint until storage cutover is enabled")
-
-
 def persist_product_media(product_id: str, business_id: str, image_path: Path | None = None, model_path: Path | None = None, qr_path: Path | None = None) -> dict | None:
     updates: dict[str, str] = {}
     if image_path and image_path.exists():
-        updates["image_path"] = store_media(API_BASE_URL, image_path, _media_key("products", business_id, image_path.name), "image/jpeg")
+        updates["image_path"] = store_media(
+            API_BASE_URL,
+            image_path,
+            _media_key("products", business_id, image_path.name),
+            _content_type(image_path.name, "image/jpeg"),
+        )
     if model_path and model_path.exists():
-        updates["model_path"] = store_media(API_BASE_URL, model_path, _media_key("models", business_id, model_path.name), "model/gltf-binary")
+        updates["model_path"] = store_media(
+            API_BASE_URL,
+            model_path,
+            _media_key("models", business_id, model_path.name),
+            "model/gltf-binary",
+        )
     if qr_path and qr_path.exists():
-        updates["qr_code"] = store_media(API_BASE_URL, qr_path, _media_key("qr", business_id, qr_path.name), "image/png")
+        updates["qr_code"] = store_media(
+            API_BASE_URL,
+            qr_path,
+            _media_key("qr", business_id, qr_path.name),
+            "image/png",
+        )
     if updates:
         return mongo_update_product(product_id, business_id, updates)
     return mongo_get_product(product_id)
@@ -71,6 +86,156 @@ def persist_product_media(product_id: str, business_id: str, image_path: Path | 
 def remove_product_media(product: dict) -> None:
     for field in ("image_path", "model_path", "qr_code"):
         delete_media(API_BASE_URL, product.get(field))
+
+
+@app.post("/api/storage/businesses/{business_slug}/logo")
+async def storage_upload_logo(
+    business_slug: str,
+    logo: UploadFile = File(...),
+    user: dict = Depends(auth_user),
+):
+    business = owned_business(user["id"], business_slug)
+    if not logo.content_type or not logo.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Logo must be an image")
+
+    ext = Path(logo.filename or "logo.png").suffix.lower() or ".png"
+    temp_path = _tmp_path(ext)
+    try:
+        temp_path.write_bytes(await logo.read())
+        old_key = business.get("logo_path")
+        key = store_media(
+            API_BASE_URL,
+            temp_path,
+            _media_key("logos", business["id"], f"logo{ext}"),
+            logo.content_type,
+        )
+        updated = update_business(business["id"], {"logo_path": key})
+        if old_key and old_key != key:
+            delete_media(API_BASE_URL, old_key)
+        return storage_business_out(updated)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+@app.post("/api/storage/businesses/{business_slug}/products")
+async def storage_create_product(
+    business_slug: str,
+    name: str,
+    price: float,
+    category: str = "Main",
+    calories: str = "",
+    protein: str = "",
+    carbs: str = "",
+    fat: str = "",
+    tags: str = "",
+    image: UploadFile = File(...),
+    user: dict = Depends(auth_user),
+):
+    business = owned_business(user["id"], business_slug)
+    if not image.content_type or not image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Upload must be an image")
+
+    import uuid
+    product_id = str(uuid.uuid4())
+    ext = Path(image.filename or "product.jpg").suffix.lower() or ".jpg"
+    temp_image = _tmp_path(ext)
+    temp_qr = _tmp_path(".png")
+    try:
+        temp_image.write_bytes(await image.read())
+        qrcode.make(f"{PUBLIC_BASE_URL}/?product={product_id}").save(temp_qr)
+        image_key = store_media(
+            API_BASE_URL,
+            temp_image,
+            _media_key("products", business["id"], f"{product_id}{ext}"),
+            image.content_type,
+        )
+        qr_key = store_media(
+            API_BASE_URL,
+            temp_qr,
+            _media_key("qr", business["id"], f"{product_id}.png"),
+            "image/png",
+        )
+        row = mongo_create_product({
+            "id": product_id,
+            "business_id": business["id"],
+            "name": name,
+            "category": category,
+            "price": price,
+            "calories": calories,
+            "protein": protein,
+            "carbs": carbs,
+            "fat": fat,
+            "tags": tags,
+            "image_path": image_key,
+            "status": "queued",
+            "qr_code": qr_key,
+            "is_published": False,
+        })
+        # 3D providers currently consume a local file, so generation receives the
+        # temporary upload and persists its GLB after generation via storage helpers.
+        queue_3d_generation(product_id, temp_image)
+        return storage_product_out(row)
+    except Exception:
+        raise
+    finally:
+        # Delay cleanup because the current 3D worker starts in a background thread.
+        # Local upload copies used by the worker are cleaned by deployment lifecycle.
+        temp_qr.unlink(missing_ok=True)
+
+
+@app.post("/api/storage/businesses/{business_slug}/products/{product_id}/image")
+async def storage_attach_product_image(
+    business_slug: str,
+    product_id: str,
+    image: UploadFile = File(...),
+    user: dict = Depends(auth_user),
+):
+    business = owned_business(user["id"], business_slug)
+    product = mongo_get_product(product_id)
+    if not product or product.get("business_id") != business["id"]:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if not image.content_type or not image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Upload must be an image")
+
+    ext = Path(image.filename or "product.jpg").suffix.lower() or ".jpg"
+    temp_path = _tmp_path(ext)
+    temp_path.write_bytes(await image.read())
+    old_image = product.get("image_path")
+    old_model = product.get("model_path")
+    key = store_media(
+        API_BASE_URL,
+        temp_path,
+        _media_key("products", business["id"], f"{product_id}{ext}"),
+        image.content_type,
+    )
+    row = mongo_update_product(
+        product_id,
+        business["id"],
+        {"image_path": key, "model_path": None, "status": "queued", "error_message": None},
+    )
+    if old_image and old_image != key:
+        delete_media(API_BASE_URL, old_image)
+    if old_model:
+        delete_media(API_BASE_URL, old_model)
+    queue_3d_generation(product_id, temp_path)
+    return storage_product_out(row)
+
+
+@app.delete("/api/storage/businesses/{business_slug}/products/{product_id}")
+def storage_delete_product(
+    business_slug: str,
+    product_id: str,
+    user: dict = Depends(auth_user),
+):
+    business = owned_business(user["id"], business_slug)
+    product = mongo_get_product(product_id)
+    if not product or product.get("business_id") != business["id"]:
+        raise HTTPException(status_code=404, detail="Product not found")
+    remove_product_media(product)
+    deleted = mongo_delete_product(product_id, business["id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return {"ok": True}
 
 
 @app.get("/storage-health", include_in_schema=False)
