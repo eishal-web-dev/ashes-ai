@@ -20,6 +20,8 @@ services:
         sync: false
       - key: ASHES_ALLOWED_ORIGINS
         sync: false
+      - key: ASHES_ADMIN_EMAILS
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: ASHES_MENU_IMPORT_PROVIDER
