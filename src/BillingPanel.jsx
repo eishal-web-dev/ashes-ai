@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Crown, Sparkles, Zap } from 'lucide-react';
-import { changeBusinessPlan, getBillingPlans, getBusinessBilling } from './api';
+import { Check, Crown, ExternalLink, Sparkles, Zap } from 'lucide-react';
+import { createBillingCheckout, devCompleteBillingCheckout, getBillingPlans, getBusinessBilling } from './api';
 
 const resourceLabels = {
   products: 'Products',
@@ -20,7 +20,9 @@ function UsageRow({ label, value, limit }) {
 export default function BillingPanel({ slug }) {
   const [billing, setBilling] = useState(null);
   const [plans, setPlans] = useState([]);
+  const [provider, setProvider] = useState('manual');
   const [changing, setChanging] = useState('');
+  const [pendingIntent, setPendingIntent] = useState(null);
   const [error, setError] = useState('');
 
   const load = async () => {
@@ -29,6 +31,9 @@ export default function BillingPanel({ slug }) {
       const [snapshot, catalog] = await Promise.all([getBusinessBilling(slug), getBillingPlans()]);
       setBilling(snapshot);
       setPlans(catalog?.plans || []);
+      setProvider(catalog?.provider || snapshot?.provider || 'manual');
+      const pending = (snapshot?.checkout_intents || []).find(intent => intent.status === 'pending');
+      setPendingIntent(pending || null);
       setError('');
     } catch (err) {
       setError(err.message || 'Could not load billing');
@@ -46,32 +51,47 @@ export default function BillingPanel({ slug }) {
   }, [billing]);
 
   const choosePlan = async plan => {
-    if (!slug || plan === currentKey) return;
+    if (!slug || plan === currentKey || plan === 'free') return;
     setChanging(plan); setError('');
-    try { setBilling(await changeBusinessPlan(slug, plan)); }
-    catch (err) { setError(err.message || 'Could not change plan'); }
+    try {
+      const intent = await createBillingCheckout(slug, plan, window.location.href, window.location.href);
+      setPendingIntent(intent);
+      if (intent?.checkout_url) window.location.assign(intent.checkout_url);
+    } catch (err) { setError(err.message || 'Could not start checkout'); }
+    finally { setChanging(''); }
+  };
+
+  const devActivate = async () => {
+    if (!pendingIntent?.id) return;
+    setChanging(pendingIntent.plan); setError('');
+    try {
+      const snapshot = await devCompleteBillingCheckout(slug, pendingIntent.id);
+      setBilling(snapshot); setPendingIntent(null);
+    } catch (err) { setError(err.message || 'Development activation is disabled'); }
     finally { setChanging(''); }
   };
 
   return <section className="billing-section glass-panel" id="billing">
     <div className="billing-heading">
-      <div><span className="kicker">ASHES SUBSCRIPTION</span><h2>Plan & usage</h2><p>Limits protect generation costs while your business scales. Real payment checkout can be connected later without changing this plan system.</p></div>
+      <div><span className="kicker">ASHES SUBSCRIPTION</span><h2>Plan & usage</h2><p>Usage limits protect AI generation costs. Paid upgrades now create a checkout intent and only activate after payment confirmation.</p></div>
       <div className="current-plan-badge"><Crown size={16}/><span>{billing?.plan?.name || 'Free'}</span><small>{billing?.status || 'active'}</small></div>
     </div>
 
     {billing && <div className="billing-usage-grid">{usageRows.map(row => <UsageRow key={row.key} {...row} />)}</div>}
+    {pendingIntent && <div className="billing-pending"><div><strong>{pendingIntent.plan?.toUpperCase()} checkout pending</strong><span>{provider === 'manual' ? 'Payment provider is not connected yet. The plan has not been activated.' : 'Complete payment to activate this plan.'}</span></div>{pendingIntent.checkout_url ? <a className="secondary-btn" href={pendingIntent.checkout_url}><ExternalLink size={14}/> Continue checkout</a> : <button className="secondary-btn" onClick={devActivate}>Dev activate</button>}</div>}
     {error && <div className="form-error">{error}</div>}
 
     <div className="plan-grid">
       {plans.map(plan => {
         const active = plan.key === currentKey;
         const featured = plan.key === 'starter';
+        const pending = pendingIntent?.plan === plan.key && pendingIntent?.status === 'pending';
         return <article key={plan.key} className={`plan-card ${active ? 'active' : ''} ${featured ? 'featured' : ''}`}>
           <div className="plan-card-top"><div><span>{plan.name}</span><strong>{plan.price_monthly_usd === 0 ? '$0' : `$${plan.price_monthly_usd}`}<small>/mo</small></strong></div>{featured && <Zap size={18}/>}</div>
           <div className="plan-limits"><span>{plan.product_limit} products</span><span>{plan.ai_generations_monthly} AI generations / month</span><span>{plan.menu_imports_monthly} menu imports / month</span><span>{plan.table_qr_limit} table QRs</span></div>
           <div className="plan-features">{(plan.features || []).map(feature => <div key={feature}><Check size={14}/><span>{feature}</span></div>)}</div>
-          <button className={active ? 'secondary-btn wide' : 'primary-btn wide'} disabled={active || changing === plan.key} onClick={() => choosePlan(plan.key)}>
-            {active ? 'Current plan' : changing === plan.key ? 'Switching…' : <>Choose {plan.name} <Sparkles size={15}/></>}
+          <button className={active ? 'secondary-btn wide' : 'primary-btn wide'} disabled={active || plan.key === 'free' || changing === plan.key || pending} onClick={() => choosePlan(plan.key)}>
+            {active ? 'Current plan' : plan.key === 'free' ? 'Free tier' : pending ? 'Checkout pending' : changing === plan.key ? 'Creating checkout…' : <>Upgrade to {plan.name} <Sparkles size={15}/></>}
           </button>
         </article>;
       })}
