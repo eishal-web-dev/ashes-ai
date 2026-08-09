@@ -13,6 +13,7 @@ import './retail-warranty.css';
 import './profile-themes.css';
 import './consumer-checkout.css';
 import './customer-cart.css';
+import './product-configurator.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
