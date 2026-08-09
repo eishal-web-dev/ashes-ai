@@ -5,6 +5,7 @@ import ProfileThemeEnhancer from './ProfileThemeEnhancer';
 import DashboardUXEnhancer from './DashboardUXEnhancer';
 import MerchantOperationsEnhancer from './MerchantOperationsEnhancer';
 import CommerceSourceManager from './CommerceSourceManager';
+import PricingModelEnhancer from './PricingModelEnhancer';
 import './styles.css';
 import './ui-refresh.css';
 import './app-polish.css';
@@ -23,6 +24,7 @@ import './qr-studio.css';
 import './merchant-operations.css';
 import './commerce-sources.css';
 import './final-ui.css';
+import './pricing-model.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -31,5 +33,6 @@ createRoot(document.getElementById('root')).render(
     <DashboardUXEnhancer />
     <MerchantOperationsEnhancer />
     <CommerceSourceManager />
+    <PricingModelEnhancer />
   </React.StrictMode>
 );
