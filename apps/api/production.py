@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
-# Import storage-aware Mongo routes first so production uses persistent media.
+# Load project-local environment before importing Mongo/storage modules.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env", override=False)
+load_dotenv(override=False)
+
+# Import storage-aware Mongo routes only after environment is loaded.
 from apps.api.storage_main import app
 import apps.api.storage_menu_import  # noqa: F401
 import apps.api.billing  # noqa: F401
