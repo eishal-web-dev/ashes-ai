@@ -50,6 +50,11 @@ def init_mongo() -> None:
     collection("manual_payment_proofs").create_index("id", unique=True)
     collection("manual_payment_proofs").create_index([("status", ASCENDING), ("created_at", DESCENDING)])
     collection("manual_payment_proofs").create_index([("business_id", ASCENDING), ("created_at", DESCENDING)])
+    collection("account_tokens").create_index("token_hash", unique=True)
+    collection("account_tokens").create_index([("user_id", ASCENDING), ("purpose", ASCENDING), ("created_at", DESCENDING)])
+    collection("notifications").create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+    collection("notifications").create_index([("user_id", ASCENDING), ("read_at", ASCENDING)])
+    collection("mail_events").create_index([("to", ASCENDING), ("created_at", DESCENDING)])
 
 
 def clean_doc(doc: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
@@ -69,7 +74,7 @@ def new_id() -> str:
 
 
 def create_user(email: str, password_hash: str, name: str) -> dict[str, Any]:
-    doc = {"id": new_id(), "email": email, "password_hash": password_hash, "name": name, "created_at": now_iso()}
+    doc = {"id": new_id(), "email": email, "password_hash": password_hash, "name": name, "email_verified": False, "created_at": now_iso()}
     collection("users").insert_one(doc)
     return clean_doc(doc)
 
