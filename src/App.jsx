@@ -5,6 +5,8 @@ import BusinessOnboardingShell from './BusinessOnboardingShell';
 import BusinessAuth from './BusinessAuth';
 import MenuExperience from './MenuExperience';
 import AdminDashboard from './AdminDashboard';
+import RetailWarrantyManager from './RetailWarrantyManager';
+import RetailWarrantyOverlay from './RetailWarrantyOverlay';
 import { getStoredBusiness, getStoredUser, getToken } from './api';
 
 const experiences = [
@@ -63,9 +65,9 @@ export default function App() {
 
   if (view === 'admin') { if (!getToken()) return <BusinessAuth onBack={goHome} onAuthenticated={handleAuthenticated} />; return <AdminDashboard onBack={goHome} />; }
   if (view === 'menu') return <MenuExperience businessSlug={menuBusinessSlug} tableCode={tableCode} onBack={goHome} onOpenProduct={openProduct} />;
-  if (view === 'product') return <ProductExperience onBack={tableCode && menuBusinessSlug ? () => setView('menu') : goHome} productId={activeProductId || undefined} />;
+  if (view === 'product') return <><ProductExperience onBack={tableCode && menuBusinessSlug ? () => setView('menu') : goHome} productId={activeProductId || undefined} /><RetailWarrantyOverlay productId={activeProductId || deepLinkedProductId || undefined} /></>;
   if (view === 'auth') return <BusinessAuth onBack={goHome} onAuthenticated={handleAuthenticated} />;
-  if (view === 'business') return <BusinessOnboardingShell onBack={goHome} onOpenProduct={openProduct} business={business} user={user} onLogout={logout} onBusinessUpdated={setBusiness} />;
+  if (view === 'business') return <><BusinessOnboardingShell onBack={goHome} onOpenProduct={openProduct} business={business} user={user} onLogout={logout} onBusinessUpdated={setBusiness} /><RetailWarrantyManager business={business} /></>;
 
   return (
     <main className="site-shell">
