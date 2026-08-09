@@ -17,6 +17,7 @@ import apps.api.storage_menu_import  # noqa: F401
 import apps.api.billing  # noqa: F401
 import apps.api.admin  # noqa: F401
 import apps.api.manual_payments  # noqa: F401
+import apps.api.retail_products  # noqa: F401
 from apps.api.mongo_db import database
 
 
