@@ -20,6 +20,26 @@ const steps = [
   { n: '04', icon: ScanLine, title: 'Customers explore', text: 'No separate app. Scan, rotate, inspect and launch AR instantly.' },
 ];
 
+function AiHeroArtwork() {
+  return (
+    <div className="hero-visual" aria-label="Ashes AI futuristic 3D commerce visual">
+      <div className="hero-hud-top"><span>ASHES // VISION</span><span className="hud-online">● ONLINE</span></div>
+      <div className="orb orb-one" /><div className="orb orb-two" /><div className="scan-grid" />
+      <div className="ai-portrait" aria-hidden="true">
+        <div className="ai-halo halo-one" /><div className="ai-halo halo-two" />
+        <div className="ai-head"><div className="ai-face-line face-line-a"/><div className="ai-face-line face-line-b"/><div className="ai-eye eye-left"/><div className="ai-eye eye-right"/><div className="ai-mouth"/></div>
+        <div className="ai-neck"/><div className="ai-shoulders"/>
+        <div className="scan-beam"/>
+      </div>
+      <div className="data-chip chip-one"><span>AI RECONSTRUCTION</span><b>98.7%</b></div>
+      <div className="data-chip chip-two"><span>3D ASSET</span><b>GLB READY</b></div>
+      <div className="data-chip chip-three"><span>AR LAYER</span><b>ACTIVE</b></div>
+      <div className="data-chip chip-four"><span>OBJECT DEPTH</span><b>SYNCED</b></div>
+      <div className="hero-hud-bottom"><span>PHOTO</span><i/><span>AI</span><i/><span>3D</span><i/><span>AR</span></div>
+    </div>
+  );
+}
+
 export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const deepLinkedProductId = params.get('product');
@@ -35,35 +55,13 @@ export default function App() {
   const [user, setUser] = useState(initialUser);
   const [activeProductId, setActiveProductId] = useState(deepLinkedProductId || null);
 
-  const goHome = () => {
-    if (window.location.pathname === '/admin' || window.location.search) window.history.replaceState({}, '', '/');
-    setActiveProductId(null);
-    setView('home');
-  };
-
+  const goHome = () => { if (window.location.pathname === '/admin' || window.location.search) window.history.replaceState({}, '', '/'); setActiveProductId(null); setView('home'); };
   const openBusiness = () => setView(hasSession || (business && getToken()) ? 'business' : 'auth');
+  const handleAuthenticated = (session) => { setBusiness(session.business); setUser(session.user); setView(adminPath ? 'admin' : 'business'); };
+  const openProduct = (productId) => { setActiveProductId(productId || null); setView('product'); };
+  const logout = () => { setBusiness(null); setUser(null); setView('home'); };
 
-  const handleAuthenticated = (session) => {
-    setBusiness(session.business);
-    setUser(session.user);
-    setView(adminPath ? 'admin' : 'business');
-  };
-
-  const openProduct = (productId) => {
-    setActiveProductId(productId || null);
-    setView('product');
-  };
-
-  const logout = () => {
-    setBusiness(null);
-    setUser(null);
-    setView('home');
-  };
-
-  if (view === 'admin') {
-    if (!getToken()) return <BusinessAuth onBack={goHome} onAuthenticated={handleAuthenticated} />;
-    return <AdminDashboard onBack={goHome} />;
-  }
+  if (view === 'admin') { if (!getToken()) return <BusinessAuth onBack={goHome} onAuthenticated={handleAuthenticated} />; return <AdminDashboard onBack={goHome} />; }
   if (view === 'menu') return <MenuExperience businessSlug={menuBusinessSlug} tableCode={tableCode} onBack={goHome} onOpenProduct={openProduct} />;
   if (view === 'product') return <ProductExperience onBack={tableCode && menuBusinessSlug ? () => setView('menu') : goHome} productId={activeProductId || undefined} />;
   if (view === 'auth') return <BusinessAuth onBack={goHome} onAuthenticated={handleAuthenticated} />;
@@ -86,8 +84,7 @@ export default function App() {
           <div className="hero-actions"><button className="primary-btn" onClick={() => openProduct(null)}>Try live scan demo <ArrowRight size={17} /></button><button className="secondary-btn" onClick={openBusiness}>{business ? 'Open dashboard' : 'Join as a business'}</button></div>
           <div className="proof-row"><div><strong>1</strong><span>photo to start</span></div><div><strong>3D</strong><span>web-ready output</span></div><div><strong>0</strong><span>apps to install</span></div></div>
         </div>
-
-        <div className="hero-visual" aria-label="Ashes AI 3D product preview concept"><div className="orb orb-one" /><div className="orb orb-two" /><div className="scan-grid" /><div className="product-core"><div className="product-ring ring-a" /><div className="product-ring ring-b" /><div className="product-object">A</div></div><div className="data-chip chip-one"><span>AI GENERATED</span><b>98%</b></div><div className="data-chip chip-two"><span>3D READY</span><b>GLB</b></div><div className="data-chip chip-three"><span>AR ENABLED</span><b>LIVE</b></div><div className="data-chip chip-four"><span>SCANS</span><b>482</b></div></div>
+        <AiHeroArtwork />
       </section>
 
       <section className="experience-section container" id="experiences"><div className="section-head"><div><span className="kicker">BUILT FOR THE PHYSICAL WORLD</span><h2>One Ashes. Hundreds of businesses.</h2></div><p>Restaurants, cafés and shopping brands join the same platform. Their customers only need a QR scan.</p></div><div className="experience-grid">{experiences.map(({ icon: Icon, title, text }) => <article className="glass-card" key={title}><div className="icon-box"><Icon /></div><h3>{title}</h3><p>{text}</p><button className="text-btn" onClick={() => openProduct(null)}>View experience <ArrowRight size={15} /></button></article>)}</div></section>
