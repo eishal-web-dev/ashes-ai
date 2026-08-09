@@ -25,9 +25,7 @@ export default function MenuExperience({ businessSlug, tableCode, onBack, onOpen
 
   useEffect(() => {
     if (!result?.id || ['served', 'cancelled'].includes(result.status)) return;
-    const timer = setInterval(async () => {
-      try { setResult(await getOrder(result.id)); } catch {}
-    }, 4000);
+    const timer = setInterval(async () => { try { setResult(await getOrder(result.id)); } catch {} }, 4000);
     return () => clearInterval(timer);
   }, [result?.id, result?.status]);
 
@@ -39,12 +37,7 @@ export default function MenuExperience({ businessSlug, tableCode, onBack, onOpen
   const accent = business?.accent_color || '#ff2f9f';
   const initial = (business?.name || 'A').slice(0, 1).toUpperCase();
 
-  const changeQty = (id, delta) => setCart(prev => {
-    const next = Math.max(0, (prev[id] || 0) + delta);
-    const copy = { ...prev };
-    if (next === 0) delete copy[id]; else copy[id] = next;
-    return copy;
-  });
+  const changeQty = (id, delta) => setCart(prev => { const next = Math.max(0, (prev[id] || 0) + delta); const copy = { ...prev }; if (next === 0) delete copy[id]; else copy[id] = next; return copy; });
 
   const placeOrder = async () => {
     if (!cartItems.length) return;
@@ -52,8 +45,10 @@ export default function MenuExperience({ businessSlug, tableCode, onBack, onOpen
     try {
       const order = await createOrder({
         items: cartItems.map(x => ({ product_id: x.product.id, quantity: x.quantity })),
-        table_code: tableCode || null,
+        table_code: tableCode || 'DINE-IN',
         customer_name: customerName || null,
+        fulfillment_type: 'dine_in',
+        payment_method: 'cash',
         notes: notes || null,
       });
       setResult(order); setCart({});
