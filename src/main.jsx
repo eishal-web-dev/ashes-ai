@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import ProfileThemeEnhancer from './ProfileThemeEnhancer';
+import DashboardUXEnhancer from './DashboardUXEnhancer';
 import './styles.css';
 import './ui-refresh.css';
 import './app-polish.css';
@@ -16,10 +17,12 @@ import './customer-cart.css';
 import './product-configurator.css';
 import './customer-storefront.css';
 import './order-tracking.css';
+import './qr-studio.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <App />
     <ProfileThemeEnhancer />
+    <DashboardUXEnhancer />
   </React.StrictMode>
 );
