@@ -14,6 +14,7 @@ import './profile-themes.css';
 import './consumer-checkout.css';
 import './customer-cart.css';
 import './product-configurator.css';
+import './customer-storefront.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
