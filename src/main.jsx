@@ -6,6 +6,7 @@ import './ui-refresh.css';
 import './app-polish.css';
 import './dashboard-refresh.css';
 import './website-refresh.css';
+import './onboarding.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
