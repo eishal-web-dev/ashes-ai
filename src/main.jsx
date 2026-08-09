@@ -11,6 +11,7 @@ import './onboarding.css';
 import './superadmin-refresh.css';
 import './retail-warranty.css';
 import './profile-themes.css';
+import './consumer-checkout.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
