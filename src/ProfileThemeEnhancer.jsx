@@ -22,6 +22,8 @@ const ADMIN_THEMES = [
   { key: 'matrix-green', name: 'Matrix Green', mood: 'Infra · Live', colors: ['#020805','#0c1711','#52e58a','#17824a','#ecfff4'], accent: '#52e58a', bg: '#020805', surface: '#0c1711', secondary: '#17824a', text: '#ecfff4' },
 ];
 
+function readLocal(key) { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } }
+
 function setNativeInputValue(input, value) {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
   setter?.call(input, value);
@@ -58,6 +60,28 @@ function themeCard(theme, current, onPick) {
   return button;
 }
 
+function mountBusinessProfileHeader() {
+  const panel = document.querySelector('.business-shell #business-settings');
+  if (!panel || panel.querySelector('.business-profile-studio')) return;
+  const business = readLocal('ashes_business') || {};
+  const user = readLocal('ashes_user') || {};
+  const logo = panel.querySelector('.brand-logo-preview img')?.src || '';
+  const initial = (business.name || user.name || 'A').slice(0,1).toUpperCase();
+  const themeKey = localStorage.getItem('ashes_business_theme') || 'ashes-pink';
+  const theme = BUSINESS_THEMES.find(t => t.key === themeKey) || BUSINESS_THEMES[0];
+  const card = document.createElement('div');
+  card.className = 'business-profile-studio';
+  card.innerHTML = `
+    <div class="business-profile-cover"><div class="profile-cover-glow one"></div><div class="profile-cover-glow two"></div><div class="profile-cover-grid"></div></div>
+    <div class="business-profile-main">
+      <div class="business-profile-avatar">${logo ? `<img src="${logo}" alt="${business.name || 'Business'}">` : `<span>${initial}</span>`}<b>✓</b></div>
+      <div class="business-profile-copy"><span>ASHES BUSINESS PROFILE</span><h2>${business.name || 'Your business'}</h2><p>@${business.slug || 'business'} · ${business.kind || 'business'}${business.city ? ` · ${business.city}` : ''}</p><div class="profile-chip-row"><i>LIVE PROFILE</i><i>${user.email || 'Owner account'}</i><i>${theme.name}</i></div></div>
+      <div class="business-profile-score"><span>PROFILE</span><strong>${business.logo_url && business.city ? '90%' : business.city ? '75%' : '60%'}</strong><small>Brand readiness</small></div>
+    </div>
+    <div class="business-profile-preview-strip"><span>QR EXPERIENCE THEME</span><div class="profile-palette-dots">${theme.colors.map(c => `<i style="background:${c}"></i>`).join('')}</div><b>${theme.name}</b></div>`;
+  panel.prepend(card);
+}
+
 function mountBusinessGallery() {
   const field = document.querySelector('.business-shell .accent-field');
   const root = document.querySelector('.business-shell');
@@ -84,6 +108,8 @@ function mountBusinessGallery() {
       if (input) setNativeInputValue(input, picked.accent);
       const custom = wrapper.querySelector('.custom-color-button input');
       if (custom) custom.value = picked.accent;
+      const strip = root.querySelector('.business-profile-preview-strip');
+      if (strip) { strip.querySelector('b').textContent = picked.name; strip.querySelector('.profile-palette-dots').innerHTML = picked.colors.map(c => `<i style="background:${c}"></i>`).join(''); }
       render();
     })));
   };
@@ -110,15 +136,14 @@ function mountAdminProfile() {
   let selected = localStorage.getItem('ashes_admin_theme') || 'command-amber';
   applyTheme(shell, ADMIN_THEMES.find(t => t.key === selected) || ADMIN_THEMES[0], 'admin');
 
-  let user = null;
-  try { user = JSON.parse(localStorage.getItem('ashes_user') || 'null'); } catch {}
+  const user = readLocal('ashes_user');
   const name = user?.name || 'Super Admin';
   const email = user?.email || 'Platform owner';
   const initials = name.split(/\s+/).map(x => x[0]).join('').slice(0,2).toUpperCase() || 'SA';
 
   const studio = document.createElement('section');
   studio.className = 'superadmin-profile-studio';
-  studio.innerHTML = `<div class="admin-profile-card"><div class="admin-profile-avatar">${initials}</div><div><span>PLATFORM OWNER</span><h2>${name}</h2><p>${email}</p></div><div class="admin-profile-badge">SUPER ADMIN</div></div><div class="admin-theme-studio"><div class="theme-gallery-head"><div><span>CONTROL CENTER APPEARANCE</span><h3>Command themes</h3><p>Your admin console has its own identity, separate from every merchant.</p></div><b>${ADMIN_THEMES.length} systems</b></div><div class="palette-grid admin-palette-grid"></div></div>`;
+  studio.innerHTML = `<div class="admin-profile-card"><div class="admin-profile-avatar">${initials}<i>✓</i></div><div class="admin-profile-copy"><span>PLATFORM OWNER</span><h2>${name}</h2><p>${email}</p></div><div class="admin-profile-badge">SUPER ADMIN</div><div class="admin-owner-stats"><span><b>FULL</b> ACCESS</span><span><b>LIVE</b> PLATFORM</span><span><b>2FA</b> READY</span></div><div class="admin-security-note"><strong>Owner console</strong><span>Theme and platform controls are isolated from merchant accounts.</span></div></div><div class="admin-theme-studio"><div class="theme-gallery-head"><div><span>CONTROL CENTER APPEARANCE</span><h3>Command themes</h3><p>Your admin console has its own identity, separate from every merchant.</p></div><b>${ADMIN_THEMES.length} systems</b></div><div class="palette-grid admin-palette-grid"></div></div>`;
   const grid = studio.querySelector('.palette-grid');
   const render = () => {
     grid.innerHTML = '';
@@ -134,7 +159,7 @@ function mountAdminProfile() {
 
 export default function ProfileThemeEnhancer() {
   useEffect(() => {
-    const sync = () => { mountBusinessGallery(); mountAdminProfile(); };
+    const sync = () => { mountBusinessProfileHeader(); mountBusinessGallery(); mountAdminProfile(); };
     sync();
     const observer = new MutationObserver(sync);
     observer.observe(document.body, { childList: true, subtree: true });
