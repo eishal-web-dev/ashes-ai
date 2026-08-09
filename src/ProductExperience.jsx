@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Float, useGLTF } from '@react-three/drei';
-import { ArrowLeft, Box, Camera, Check, Flame, Leaf, LoaderCircle, Minus, Plus, ScanLine, ShoppingBag, Sparkles, Utensils, Wheat, X } from 'lucide-react';
+import { ArrowLeft, Box, Camera, Check, Flame, Leaf, LoaderCircle, Minus, Moon, Plus, ScanLine, ShieldCheck, ShoppingBag, Sparkles, Sun, Utensils, Wheat, X } from 'lucide-react';
 import { absoluteApiUrl, createOrder, getProduct, getProductBusiness, trackProductEvent } from './api';
 
 function DemoFoodModel() {
@@ -34,6 +34,7 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
   const [business, setBusiness] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [cartOpen, setCartOpen] = useState(false);
+  const [daylight, setDaylight] = useState(() => localStorage.getItem('ashes_consumer_theme') === 'daylight');
   const [quantity, setQuantity] = useState(1);
   const [tableCode, setTableCode] = useState(() => new URLSearchParams(window.location.search).get('table') || '');
   const [customerName, setCustomerName] = useState('');
@@ -89,6 +90,14 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
     try { await arViewerRef.current.activateAR(); } catch { setMode('ar'); }
   };
 
+  const toggleTheme = () => {
+    setDaylight(value => {
+      const next = !value;
+      localStorage.setItem('ashes_consumer_theme', next ? 'daylight' : 'night');
+      return next;
+    });
+  };
+
   const placeOrder = async () => {
     if (!productId) return;
     setPlacingOrder(true); setOrderError('');
@@ -108,7 +117,7 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
   };
 
   return (
-    <main className="product-page" style={{ '--business-accent': accent }}>
+    <main className={`product-page ${daylight ? 'daylight' : ''}`} style={{ '--business-accent': accent }}>
       <div className="scan-grid" />
       <header className="product-topbar">
         <button className="icon-button" onClick={onBack} aria-label="Back"><ArrowLeft size={20} /></button>
@@ -116,7 +125,7 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
           <div className="brand-mark">{business?.logo_url ? <img src={absoluteApiUrl(business.logo_url)} alt={business.name}/> : merchantInitial}</div>
           <div><strong>{business?.name || 'ASHES AI'}</strong><span>POWERED BY ASHES AI</span></div>
         </div>
-        <button className="cart-pill" onClick={() => setCartOpen(true)}><ShoppingBag size={16} /> {quantity} · Rs {total.toLocaleString()}</button>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}><button className="consumer-theme-toggle" onClick={toggleTheme}>{daylight ? <Moon size={15}/> : <Sun size={15}/>}<span>{daylight ? 'Night' : 'Daylight'}</span></button><button className="cart-pill" onClick={() => setCartOpen(true)}><ShoppingBag size={16} /> {quantity} · Rs {total.toLocaleString()}</button></div>
       </header>
 
       {modelReady && <model-viewer ref={arViewerRef} class="ashes-hidden-ar-viewer" src={modelUrl} ar ar-modes="webxr scene-viewer quick-look" camera-controls shadow-intensity="1" exposure="1" alt={data.name} />}
@@ -149,28 +158,32 @@ export default function ProductExperience({ onBack, productId: propProductId }) 
           <div className="price-row"><strong>Rs {Number(data.price || 0).toLocaleString()}</strong><span>{tableCode ? `Table ${tableCode}` : business?.city || 'Table not set'}</span></div>
           <div className="stats-grid"><Stat icon={Flame} label="Calories" value={data.calories || '—'} /><Stat icon={Utensils} label="Protein" value={data.protein || '—'} /><Stat icon={Leaf} label="Carbs" value={data.carbs || '—'} /><Stat icon={Wheat} label="Fat" value={data.fat || '—'} /></div>
           <div className="tag-row">{(data.tags || []).map(tag => <span key={tag}>{tag}</span>)}</div>
+          <div className="consumer-trust-row"><div><strong>No app needed</strong><span>Scan & explore</span></div><div><strong>Direct ordering</strong><span>Sent to merchant</span></div><div><strong>3D + AR</strong><span>Interactive twin</span></div></div>
           {loadError && <div className="allergen-note glass-panel"><strong>Product loading</strong><p>{loadError}</p></div>}
           {data.error_message && <div className="allergen-note glass-panel"><strong>3D pipeline status</strong><p>{data.error_message}</p></div>}
-          <div className="cta-stack"><button className="primary-action wide" disabled={!modelReady} onClick={launchAR}><Camera size={19} /> VIEW ON MY TABLE</button><button className="secondary-action wide" onClick={() => setCartOpen(true)}><Utensils size={19} /> ADD TO ORDER</button></div>
+          <div className="cta-stack"><button className="primary-action wide" disabled={!modelReady} onClick={launchAR}><Camera size={19} /> VIEW IN AR</button><button className="secondary-action wide" onClick={() => setCartOpen(true)}><ShoppingBag size={19} /> CONTINUE TO ORDER</button></div>
         </aside>
       </section>
 
       {cartOpen && <div className="cart-backdrop" onClick={() => setCartOpen(false)}>
         <aside className="order-drawer glass-panel" onClick={e => e.stopPropagation()}>
-          <div className="order-drawer-head"><div><span className="kicker">TABLE ORDER</span><h2>{business?.name || 'Your'} order</h2></div><button className="icon-button" onClick={() => setCartOpen(false)}><X size={18}/></button></div>
+          <div className="checkout-hero"><div className="order-drawer-head"><div><span className="kicker">FAST CHECKOUT</span><h2>{business?.name || 'Your'} order</h2></div><button className="icon-button" onClick={() => setCartOpen(false)}><X size={18}/></button></div><div className="checkout-progress"><span className="active"/><span className="active"/><span/></div></div>
+          <div className="checkout-body">
           {orderResult ? (
             <div className="order-success"><div className="success-icon"><Check size={28}/></div><h3>Order sent.</h3><p>Order <strong>#{orderResult.id.slice(0,8).toUpperCase()}</strong> is now in the restaurant queue.</p><div className="order-status-line"><span>Status</span><strong>{orderResult.status}</strong></div><div className="order-status-line"><span>Total</span><strong>Rs {Number(orderResult.total).toLocaleString()}</strong></div><button className="primary-btn wide" onClick={() => setCartOpen(false)}>Done</button></div>
           ) : (
             <>
-              <div className="cart-product"><div><strong>{data.name}</strong><span>Rs {Number(data.price || 0).toLocaleString()} each</span></div><div className="qty-control"><button onClick={() => setQuantity(q => Math.max(1, q - 1))}><Minus size={15}/></button><strong>{quantity}</strong><button onClick={() => setQuantity(q => q + 1)}><Plus size={15}/></button></div></div>
+              <div className="checkout-summary-card"><div className="cart-product"><div><strong>{data.name}</strong><span>Rs {Number(data.price || 0).toLocaleString()} each</span></div><div className="qty-control"><button onClick={() => setQuantity(q => Math.max(1, q - 1))}><Minus size={15}/></button><strong>{quantity}</strong><button onClick={() => setQuantity(q => q + 1)}><Plus size={15}/></button></div></div></div>
               <label className="order-field"><span>Table number / code</span><input value={tableCode} onChange={e => setTableCode(e.target.value)} placeholder="T12" /></label>
               <label className="order-field"><span>Your name (optional)</span><input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Name" /></label>
-              <label className="order-field"><span>Notes</span><textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="No onions, extra sauce…" /></label>
+              <label className="order-field"><span>Order notes</span><textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="No onions, extra sauce…" /></label>
+              <div className="checkout-secure-note"><ShieldCheck size={15}/><span><b>Direct merchant order.</b> Ashes sends this request straight to the business dashboard.</span></div>
               <div className="order-total"><span>Total</span><strong>Rs {total.toLocaleString()}</strong></div>
               {orderError && <div className="form-error">{orderError}</div>}
-              <button className="primary-btn wide" disabled={placingOrder} onClick={placeOrder}>{placingOrder ? 'Sending order…' : 'Send order to restaurant'} <ShoppingBag size={17}/></button>
+              <button className="primary-btn wide" disabled={placingOrder} onClick={placeOrder}>{placingOrder ? 'Sending order…' : 'Place order'} <ShoppingBag size={17}/></button>
             </>
           )}
+          </div>
         </aside>
       </div>}
     </main>
