@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, CheckCircle2, CircleDot, Clock3, Globe2, Instagram, Minus, Phone, Plus, ShoppingBag, Sparkles, Utensils, X } from 'lucide-react';
+import { ArrowLeft, Camera, CheckCircle2, CircleDot, Clock3, Globe2, Minus, Phone, Plus, ShoppingBag, Sparkles, Utensils, X } from 'lucide-react';
 import { absoluteApiUrl, createOrder, getBusinessProducts, getBusinessProfile, getOrder } from './api';
 
 const orderSteps = ['new', 'accepted', 'preparing', 'ready', 'served'];
@@ -83,7 +83,7 @@ export default function MenuExperience({ businessSlug, tableCode, onBack, onOpen
         <div className="menu-business-meta">
           {business?.city && <span>{business.city}</span>}
           {business?.phone && <a href={`tel:${business.phone}`}><Phone size={13}/> {business.phone}</a>}
-          {business?.instagram && <span><Instagram size={13}/> {business.instagram}</span>}
+          {business?.instagram && <span><Camera size={13}/> {business.instagram}</span>}
           {business?.website && <span><Globe2 size={13}/> {business.website}</span>}
         </div>
       </div>
