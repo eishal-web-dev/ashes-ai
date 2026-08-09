@@ -2,6 +2,20 @@ import { useState } from 'react';
 import { ArrowLeft, ArrowRight, Building2, LockKeyhole, Mail, MapPin, Sparkles, Store, User } from 'lucide-react';
 import { loginBusiness, signupBusiness } from './api';
 
+const selectStyle = {
+  color: '#f7fbff',
+  backgroundColor: '#111522',
+  border: '1px solid rgba(98,239,255,.18)',
+  borderRadius: '13px',
+  minHeight: '48px',
+  width: '100%',
+  padding: '0 14px',
+  outline: 'none',
+  colorScheme: 'dark',
+};
+
+const optionStyle = { backgroundColor: '#0b0f18', color: '#f7fbff' };
+
 export default function BusinessAuth({ onBack, onAuthenticated }) {
   const [mode, setMode] = useState('signup');
   const [form, setForm] = useState({ owner_name: '', email: '', password: '', business_name: '', kind: 'restaurant', city: '' });
@@ -58,7 +72,16 @@ export default function BusinessAuth({ onBack, onAuthenticated }) {
               <label><span><User size={14}/> Owner name</span><input value={form.owner_name} onChange={(e) => set('owner_name', e.target.value)} placeholder="Your name" required /></label>
               <label><span><Store size={14}/> Business name</span><input value={form.business_name} onChange={(e) => set('business_name', e.target.value)} placeholder="Neon Bites" required /></label>
               <div className="field-row two">
-                <label><span><Building2 size={14}/> Business type</span><select value={form.kind} onChange={(e) => set('kind', e.target.value)}><option value="restaurant">Restaurant</option><option value="cafe">Café</option><option value="retail">Retail brand</option><option value="furniture">Furniture</option><option value="other">Other</option></select></label>
+                <label>
+                  <span><Building2 size={14}/> Business type</span>
+                  <select style={selectStyle} value={form.kind} onChange={(e) => set('kind', e.target.value)}>
+                    <option style={optionStyle} value="restaurant">Restaurant</option>
+                    <option style={optionStyle} value="cafe">Café</option>
+                    <option style={optionStyle} value="retail">Retail brand</option>
+                    <option style={optionStyle} value="furniture">Furniture</option>
+                    <option style={optionStyle} value="other">Other</option>
+                  </select>
+                </label>
                 <label><span><MapPin size={14}/> City</span><input value={form.city} onChange={(e) => set('city', e.target.value)} placeholder="Peshawar" /></label>
               </div>
             </>
