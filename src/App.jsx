@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight, Box, Camera, QrCode, ScanLine, Sparkles, Store, Utensils, Zap } from 'lucide-react';
 import ProductExperience from './ProductExperience';
-import BusinessDashboard from './BusinessDashboard';
+import BusinessOnboardingShell from './BusinessOnboardingShell';
 import BusinessAuth from './BusinessAuth';
 import MenuExperience from './MenuExperience';
 import AdminDashboard from './AdminDashboard';
@@ -65,7 +65,7 @@ export default function App() {
   if (view === 'menu') return <MenuExperience businessSlug={menuBusinessSlug} tableCode={tableCode} onBack={goHome} onOpenProduct={openProduct} />;
   if (view === 'product') return <ProductExperience onBack={tableCode && menuBusinessSlug ? () => setView('menu') : goHome} productId={activeProductId || undefined} />;
   if (view === 'auth') return <BusinessAuth onBack={goHome} onAuthenticated={handleAuthenticated} />;
-  if (view === 'business') return <BusinessDashboard onBack={goHome} onOpenProduct={openProduct} business={business} user={user} onLogout={logout} onBusinessUpdated={setBusiness} />;
+  if (view === 'business') return <BusinessOnboardingShell onBack={goHome} onOpenProduct={openProduct} business={business} user={user} onLogout={logout} onBusinessUpdated={setBusiness} />;
 
   return (
     <main className="site-shell">
