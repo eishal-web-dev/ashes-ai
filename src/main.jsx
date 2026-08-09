@@ -22,6 +22,7 @@ import './order-tracking.css';
 import './qr-studio.css';
 import './merchant-operations.css';
 import './commerce-sources.css';
+import './final-ui.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
