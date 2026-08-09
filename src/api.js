@@ -7,42 +7,15 @@ const USER_KEY = 'ashes_user';
 export function getToken() { return localStorage.getItem(TOKEN_KEY); }
 export function getStoredBusiness() { try { return JSON.parse(localStorage.getItem(BUSINESS_KEY) || 'null'); } catch { return null; } }
 export function getStoredUser() { try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch { return null; } }
-export function saveSession(session) {
-  if (session?.token) localStorage.setItem(TOKEN_KEY, session.token);
-  if (session?.business) localStorage.setItem(BUSINESS_KEY, JSON.stringify(session.business));
-  if (session?.user) localStorage.setItem(USER_KEY, JSON.stringify(session.user));
-}
+export function saveSession(session) { if (session?.token) localStorage.setItem(TOKEN_KEY, session.token); if (session?.business) localStorage.setItem(BUSINESS_KEY, JSON.stringify(session.business)); if (session?.user) localStorage.setItem(USER_KEY, JSON.stringify(session.user)); }
 export function updateStoredBusiness(business) { if (business) localStorage.setItem(BUSINESS_KEY, JSON.stringify(business)); }
 export function clearSession() { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(BUSINESS_KEY); localStorage.removeItem(USER_KEY); }
 
-function readableApiError(error, status) {
-  const detail = error?.detail;
-  if (typeof detail === 'string') return detail;
-  if (Array.isArray(detail)) {
-    const messages = detail.map(item => {
-      if (typeof item === 'string') return item;
-      const field = Array.isArray(item?.loc) ? item.loc.filter(x => !['body','query','path'].includes(String(x))).join(' → ') : '';
-      return `${field ? `${field}: ` : ''}${item?.msg || 'Invalid value'}`;
-    }).filter(Boolean);
-    if (messages.length) return messages.join(' · ');
-  }
-  if (detail && typeof detail === 'object') return detail.message || detail.msg || 'The server rejected this request.';
-  return error?.message || `Request failed (${status})`;
-}
+function readableApiError(error, status) { const detail=error?.detail; if(typeof detail==='string')return detail; if(Array.isArray(detail)){const messages=detail.map(item=>{if(typeof item==='string')return item;const field=Array.isArray(item?.loc)?item.loc.filter(x=>!['body','query','path'].includes(String(x))).join(' → '):'';return `${field?`${field}: `:''}${item?.msg||'Invalid value'}`}).filter(Boolean);if(messages.length)return messages.join(' · ')} if(detail&&typeof detail==='object')return detail.message||detail.msg||'The server rejected this request.';return error?.message||`Request failed (${status})`; }
+async function apiFetch(path,options={},authenticated=false){const headers={...(options.headers||{})};if(authenticated){const token=getToken();if(token)headers.Authorization=`Bearer ${token}`}const response=await fetch(`${API_BASE}${path}`,{...options,headers});if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(readableApiError(error,response.status))}return response.json()}
 
-async function apiFetch(path, options = {}, authenticated = false) {
-  const headers = { ...(options.headers || {}) };
-  if (authenticated) { const token = getToken(); if (token) headers.Authorization = `Bearer ${token}`; }
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(readableApiError(error, response.status));
-  }
-  return response.json();
-}
-
-export async function signupBusiness(values) { const session = await apiFetch('/api/auth/signup', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(values) }); saveSession(session); return session; }
-export async function loginBusiness(email,password) { const session=await apiFetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});saveSession(session);return session; }
+export async function signupBusiness(values){const session=await apiFetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)});saveSession(session);return session}
+export async function loginBusiness(email,password){const session=await apiFetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});saveSession(session);return session}
 export async function getMe(){return apiFetch('/api/auth/me',{},true)}
 export async function getBusinessProfile(slug){return apiFetch(`/api/businesses/${slug}`)}
 export async function updateBusinessProfile(slug,values){const business=await apiFetch(`/api/businesses/${slug}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)},true);updateStoredBusiness(business);return business}
@@ -55,9 +28,12 @@ export async function getBusinessAnalytics(slug){return apiFetch(`/api/businesse
 export async function getBusinessOrders(slug){return apiFetch(`/api/businesses/${slug}/orders`,{},true)}
 export async function getOrderNotifications(slug){return apiFetch(`/api/businesses/${slug}/order-notifications`,{},true)}
 export async function updateOrderStatus(slug,orderId,status){return apiFetch(`/api/businesses/${slug}/orders/${orderId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})},true)}
+export async function getOperationsSettings(slug){return apiFetch(`/api/businesses/${slug}/operations-settings`)}
+export async function updateOperationsSettings(slug,values){return apiFetch(`/api/businesses/${slug}/operations-settings`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)},true)}
+export async function updateOrderOperations(slug,orderId,values){return apiFetch(`/api/businesses/${slug}/orders/${orderId}/operations`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)},true)}
 export async function getTableQrs(slug){return apiFetch(`/api/businesses/${slug}/table-qrs`,{},true)}
 export async function createTableQr(slug,tableCode,productId=null){return apiFetch(`/api/businesses/${slug}/table-qrs`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({table_code:tableCode,product_id:productId||null})},true)}
-export async function createOrder(values){return apiFetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)})}
+export async function createOrder(values){return apiFetch('/api/orders/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)})}
 export async function getOrder(orderId){return apiFetch(`/api/orders/${orderId}`)}
 export async function createBusinessProduct(slug,values,imageFile){const form=new FormData();form.append('name',values.name);form.append('price',values.price);form.append('category',values.category||'Main');form.append('calories',values.calories||'');form.append('protein',values.protein||'');form.append('carbs',values.carbs||'');form.append('fat',values.fat||'');form.append('tags',values.tags||'');form.append('image',imageFile);return apiFetch(`/api/storage/businesses/${slug}/products`,{method:'POST',body:form},true)}
 export async function attachBusinessProductPhoto(slug,productId,imageFile){const form=new FormData();form.append('image',imageFile);return apiFetch(`/api/storage/businesses/${slug}/products/${productId}/image`,{method:'POST',body:form},true)}
