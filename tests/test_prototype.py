@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 
 from apps.api import prototype
+from apps.api.commerce_sources import _extract_product
 
 
 def test_scan_returns_clean_read_only_catalog(monkeypatch):
@@ -15,6 +16,7 @@ def test_scan_returns_clean_read_only_catalog(monkeypatch):
             "price": 249,
             "currency": "USD",
             "source_url": "https://example.com/chair",
+            "model_url": "https://cdn.example.com/chair.glb",
         }],
     )
 
@@ -26,7 +28,8 @@ def test_scan_returns_clean_read_only_catalog(monkeypatch):
     assert result["merchant"] == "example.com"
     assert result["found"] == 1
     assert result["products"][0]["name"] == "Studio Chair"
-    assert result["products"][0]["readiness"] == "image-ready"
+    assert result["products"][0]["readiness"] == "real-3d"
+    assert result["products"][0]["model_url"] == "https://cdn.example.com/chair.glb"
     assert "saved" in result["notice"].lower()
 
 
@@ -42,6 +45,18 @@ def test_scan_rejects_empty_catalog(monkeypatch):
         assert error.status_code == 422
     else:
         raise AssertionError("An empty catalog should be rejected")
+
+
+def test_extract_product_detects_model_viewer_glb():
+    html = '''
+    <html><head>
+      <script type="application/ld+json">{"@type":"Product","name":"Real Chair","offers":{"price":"99","priceCurrency":"USD"}}</script>
+    </head><body><model-viewer src="/models/chair.glb?quality=high"></model-viewer></body></html>
+    '''
+
+    product, _ = _extract_product("https://shop.example/products/chair", html)
+
+    assert product["model_url"] == "https://shop.example/models/chair.glb?quality=high"
 
 
 def test_qr_endpoint_returns_svg():
