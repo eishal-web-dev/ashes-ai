@@ -1,6 +1,6 @@
 import { Suspense, useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { ContactShadows, Environment, Float, OrbitControls } from '@react-three/drei';
+import { ContactShadows, Environment, Float, OrbitControls, Image as DreiImage, RoundedBox } from '@react-three/drei';
 import { ArrowLeft, Box, Check, Copy, Download, LoaderCircle, QrCode, Rotate3D, Share2, Sparkles } from 'lucide-react';
 import QRCode from 'qrcode';
 
@@ -19,6 +19,27 @@ function TwinGeometry({name}){
  return <group rotation={[.08,-.35,0]}><mesh><boxGeometry args={[2.4,2.4,.75]}/><meshPhysicalMaterial color="#c2b59f" roughness={.28} metalness={.1}/></mesh><mesh position={[0,0,.4]}><boxGeometry args={[1.6,1.6,.04]}/><meshStandardMaterial color="#161618" emissive="#b9ff67" emissiveIntensity={.08}/></mesh></group>;
 }
 
+function PhotoTwin({product}){
+ return <group rotation={[0,-.12,0]}>
+  <mesh position={[0,-1.42,0]} receiveShadow>
+   <cylinderGeometry args={[1.75,2.05,.2,96]}/>
+   <meshPhysicalMaterial color="#111315" metalness={.72} roughness={.2} clearcoat={1}/>
+  </mesh>
+  <mesh position={[0,-1.29,0]}>
+   <torusGeometry args={[1.55,.025,16,96]}/>
+   <meshStandardMaterial color="#b9ff67" emissive="#b9ff67" emissiveIntensity={2.4}/>
+  </mesh>
+  <RoundedBox args={[3.5,3.5,.18]} radius={.14} smoothness={8} position={[0,.25,-.12]} castShadow>
+   <meshPhysicalMaterial color="#17191b" metalness={.3} roughness={.18} clearcoat={.9}/>
+  </RoundedBox>
+  <DreiImage url={product.image_url} position={[0,.25,.01]} scale={[3.28,3.28]} radius={.1} transparent toneMapped/>
+  <mesh position={[0,.25,-.24]}>
+   <planeGeometry args={[3.85,3.85]}/>
+   <meshBasicMaterial color="#b9ff67" transparent opacity={.035}/>
+  </mesh>
+ </group>;
+}
+
 export default function PrototypeProductTwin({product,onClose}){
  const[copied,setCopied]=useState(false),[qrUrl,setQrUrl]=useState(''),[qrBusy,setQrBusy]=useState(false),[qrError,setQrError]=useState('');
  const shareUrl=useMemo(()=>{const u=new URL('/prototype',window.location.origin);u.searchParams.set('preview','1');u.searchParams.set('name',product.name||'Ashes product');if(product.image_url)u.searchParams.set('image',product.image_url);if(product.model_url)u.searchParams.set('model',product.model_url);if(product.price!=null)u.searchParams.set('price',String(product.price));u.searchParams.set('currency',product.currency||'USD');return u.toString()},[product]);
@@ -30,9 +51,9 @@ export default function PrototypeProductTwin({product,onClose}){
    <header><button onClick={onClose}><ArrowLeft size={16}/> Catalog</button><span><i/> INTERACTIVE TWIN · LIVE</span></header>
    <div className="twin-layout">
     <div className="twin-canvas">
-     <div className="twin-hud"><span><Sparkles size={13}/> {product.model_url?'ORIGINAL PRODUCT GLB':'AI SHAPE PREVIEW'}</span><span><Rotate3D size={13}/> DRAG TO ROTATE</span></div>
-     {product.model_url?<model-viewer src={product.model_url} alt={`Interactive 3D model of ${product.name}`} camera-controls auto-rotate shadow-intensity="1" exposure="1" interaction-prompt="auto" style={{width:'100%',height:'100%',background:'#09090b'}}/>:<Canvas camera={{position:[0,1,6],fov:38}}><color attach="background" args={['#09090b']}/><ambientLight intensity={1.2}/><spotLight position={[4,7,5]} intensity={45} angle={.45} penumbra={1} color="#f3eee4"/><pointLight position={[-4,1,3]} intensity={22} color="#b9ff67"/><Suspense fallback={null}><Float speed={1.25} rotationIntensity={.08} floatIntensity={.18}><TwinGeometry name={product.name}/></Float><Environment preset="studio"/><ContactShadows position={[0,-1.65,0]} opacity={.55} scale={8} blur={2.5}/></Suspense><OrbitControls enablePan={false} minDistance={4} maxDistance={8} autoRotate autoRotateSpeed={.55}/></Canvas>}
-     <div className="twin-badge"><Box size={15}/><span><b>{product.model_url?'Original 3D asset':'Prototype twin'}</b>{product.model_url?'Loaded from the merchant product page':'Procedural fallback from catalog data'}</span></div>
+     <div className="twin-hud"><span><Sparkles size={13}/> {product.model_url?'ORIGINAL PRODUCT GLB':product.image_url?'SPATIAL IMAGE TWIN':'PROCEDURAL CONCEPT'}</span><span><Rotate3D size={13}/> DRAG TO ROTATE</span></div>
+     {product.model_url?<model-viewer src={product.model_url} alt={`Interactive 3D model of ${product.name}`} camera-controls auto-rotate shadow-intensity="1" exposure="1" interaction-prompt="auto" style={{width:'100%',height:'100%',background:'#09090b'}}/>:<Canvas shadows dpr={[1,1.75]} camera={{position:[0,.45,6.4],fov:34}} gl={{antialias:true,toneMappingExposure:1.08}}><color attach="background" args={['#070809']}/><fog attach="fog" args={['#070809',7.5,12]}/><ambientLight intensity={.45}/><spotLight position={[4,7,5]} intensity={58} angle={.38} penumbra={.85} color="#fff5e8" castShadow/><pointLight position={[-4,1.5,3]} intensity={18} color="#b9ff67"/><pointLight position={[3,-1,2]} intensity={10} color="#7b61ff"/><Suspense fallback={null}>{product.image_url?<Float speed={.72} rotationIntensity={.035} floatIntensity={.12}><PhotoTwin product={product}/></Float>:<Float speed={.9} rotationIntensity={.05} floatIntensity={.12}><TwinGeometry name={product.name}/></Float>}<Environment preset="studio"/><ContactShadows position={[0,-1.55,0]} opacity={.72} scale={9} blur={2.8} far={5}/></Suspense><OrbitControls enablePan={false} enableDamping dampingFactor={.06} minDistance={4.8} maxDistance={8} minPolarAngle={Math.PI*.32} maxPolarAngle={Math.PI*.64} autoRotate autoRotateSpeed={.22}/></Canvas>}
+     <div className="twin-badge"><Box size={15}/><span><b>{product.model_url?'Original 3D asset':product.image_url?'Image-powered spatial twin':'Concept geometry'}</b>{product.model_url?'Loaded from the merchant product page':product.image_url?'Layered from the product reference image':'Used only when no image or model is available'}</span></div>
     </div>
     <aside className="twin-panel">
      <span className="prototype-kicker">PRODUCT EXPERIENCE 03</span><h2>{product.name}</h2><p>{product.description||'An interactive Ashes product twin prepared from the imported catalog.'}</p>
