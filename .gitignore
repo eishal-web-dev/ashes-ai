@@ -1,19 +1,28 @@
-node_modules
+# JavaScript
+node_modules/
+dist/
+.vite/
+*.log
 
+# Python
+.venv/
+venv/
+env/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
 
-__pycache__/
-*.pyc
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*credentials*.env
+*.pem
+*.key
 
-__pycache__/
-*.pyc
-
-__pycache__/
-*.pyc
-
-__pycache__/
-*.pyc
-
-__pycache__/
-*.pyc
+# Generated/local media
+apps/api/data/
+coverage/
+.DS_Store
+Thumbs.db
