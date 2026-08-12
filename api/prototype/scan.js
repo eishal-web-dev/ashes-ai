@@ -108,6 +108,24 @@ function pdfLinks(pageUrl,html){
   return [...new Set(links)];
 }
 
+function decodeText(value){
+  return String(value||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;|&#160;/gi,' ').replace(/&amp;/gi,'&').replace(/&quot;/gi,'"').replace(/&#0*39;|&apos;/gi,"'").replace(/&ndash;|&#8211;/gi,'–').replace(/&mdash;|&#8212;/gi,'—').replace(/\s+/g,' ').trim();
+}
+
+function productsFromMenuHtml(pageUrl,html){
+  const found=[];
+  const seen=new Set();
+  // Happy Addons/Elementor restaurant menus expose each dish in this title span.
+  for(const match of html.matchAll(/<span\b[^>]*class=["'][^"']*ha-price-menu-title-text[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi)){
+    const name=decodeText(match[1]);
+    const key=name.toLowerCase();
+    if(name.length<3||name.length>180||seen.has(key))continue;
+    seen.add(key);
+    found.push({name,description:'Imported from the restaurant’s published dinner menu.',image_url:null,price:null,currency:'GBP',source_url:pageUrl,external_product_id:null,model_url:null,readiness:'needs-image'});
+  }
+  return found.slice(0,16);
+}
+
 function productsFromMenuPdf(pdfUrl,text){
   const cleaned=String(text||'').replace(/\r/g,'\n').replace(/[ \t]+/g,' ');
   const documentCurrency=/£/.test(cleaned)?'GBP':(/\bRs\.?\s*\d/i.test(cleaned)?'PKR':'USD');
@@ -178,6 +196,9 @@ export default async function handler(request,response){
     }
     const dedup=new Map();
     for(const page of pages)for(const product of productsFromPage(page.url,page.html)){const key=String(product.external_product_id||product.source_url||product.name).toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
+    if(!dedup.size){
+      for(const product of productsFromMenuHtml(start.url,start.html)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
+    }
     if(!dedup.size){
       const menus=pdfLinks(start.url,start.html);
       if(new URL(start.url).hostname.replace(/^www\./,'')==='baranh.pk'){
