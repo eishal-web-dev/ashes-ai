@@ -134,18 +134,16 @@ function productsFromMenuPdf(pdfUrl,text){
 async function findFoodReference(name){
   try{
     const searchName=name.replace(/\([^)]*\)/g,'').replace(/\b(baranh|special|pcs?|full|half)\b/gi,'').replace(/\s+/g,' ').trim();
-    const params=new URLSearchParams({action:'query',format:'json',origin:'*',generator:'search',gsrnamespace:'6',gsrlimit:'3',gsrsearch:`${searchName} dish filetype:bitmap`,prop:'imageinfo',iiprop:'url|mime|extmetadata',iiurlwidth:'900'});
-    const response=await fetch(`https://commons.wikimedia.org/w/api.php?${params}`,{signal:AbortSignal.timeout(6500),headers:{'user-agent':USER_AGENT}});
+    const params=new URLSearchParams({action:'query',format:'json',origin:'*',generator:'search',gsrnamespace:'0',gsrlimit:'5',gsrsearch:`${searchName} food`,prop:'pageimages|info',piprop:'thumbnail',pithumbsize:'900',inprop:'url'});
+    const response=await fetch(`https://en.wikipedia.org/w/api.php?${params}`,{signal:AbortSignal.timeout(6500),headers:{'user-agent':USER_AGENT}});
     if(!response.ok)return null;
     const data=await response.json();
-    const page=Object.values(data.query?.pages||{}).find(candidate=>{
-      const info=candidate?.imageinfo?.[0];
-      return info?.mime?.startsWith('image/')&&!/\.(pdf|svg|djvu)$/i.test(candidate.title||'');
-    });
-    const info=page?.imageinfo?.[0];
-    const url=info?.thumburl||info?.url;
+    const important=searchName.toLowerCase().split(/\s+/).filter(token=>token.length>3&&!['special','chicken','mutton','food'].includes(token));
+    const pages=Object.values(data.query?.pages||{}).filter(page=>page.thumbnail?.source&&!/list of|disambiguation/i.test(page.title||''));
+    const page=pages.find(candidate=>important.some(token=>(candidate.title||'').toLowerCase().includes(token)))||pages[0];
+    const url=page?.thumbnail?.source;
     if(!url||!/^https:\/\/upload\.wikimedia\.org\//i.test(url))return null;
-    return {image_url:url,image_source_url:info.descriptionurl||null,image_credit:String(info.extmetadata?.Artist?.value||'Wikimedia Commons').replace(/<[^>]+>/g,'').slice(0,180)};
+    return {image_url:url,image_source_url:page.fullurl||null,image_credit:'Wikipedia / Wikimedia Commons reference'};
   }catch{return null;}
 }
 
