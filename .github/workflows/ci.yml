@@ -31,4 +31,4 @@ jobs:
       - run: python -m compileall apps/api tools/migrate_sqlite_to_mongo.py
       - run: python -c "import apps.api.mongo_db; print('Mongo module import OK')"
       - run: python -m py_compile apps/api/media_storage.py apps/api/storage_main.py apps/api/storage_menu_import.py apps/api/subscriptions.py apps/api/billing_settings.py apps/api/billing_provider.py apps/api/billing.py apps/api/admin.py apps/api/manual_payments.py apps/api/production.py
-      - run: pytest -q tests/test_storage_generation.py tests/test_subscriptions.py
+      - run: python -m pytest -q tests/test_storage_generation.py tests/test_subscriptions.py
