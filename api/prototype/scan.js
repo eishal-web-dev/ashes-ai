@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import pdf from 'pdf-parse';
 
 const USER_AGENT='AshesCatalogBot/1.1 (+read-only prototype catalog scan)';
 
@@ -32,6 +33,17 @@ async function getHtml(raw){
     return {url:current.toString(),html:(await response.text()).slice(0,2_000_000)};
   }
   throw new Error('The website redirected too many times.');
+}
+
+async function getPdf(raw){
+  const url=await safeUrl(raw);
+  const response=await fetch(url,{signal:AbortSignal.timeout(18000),headers:{'user-agent':USER_AGENT,accept:'application/pdf'}});
+  if(!response.ok)throw new Error(`Menu PDF returned ${response.status}.`);
+  const length=Number(response.headers.get('content-length')||0);
+  if(length>15_000_000)throw new Error('Menu PDF is too large to scan safely.');
+  const bytes=Buffer.from(await response.arrayBuffer());
+  if(bytes.length>15_000_000)throw new Error('Menu PDF is too large to scan safely.');
+  return {url:url.toString(),text:(await pdf(bytes)).text};
 }
 
 function walk(value,visit){
@@ -80,6 +92,43 @@ function productLinks(pageUrl,html){
   return [...new Set(links)];
 }
 
+function pdfLinks(pageUrl,html){
+  const root=new URL(pageUrl);
+  const links=[];
+  for(const match of html.matchAll(/<a\b[^>]*href=["']([^"'#]+\.pdf(?:\?[^"']*)?)["']/gi)){
+    try{const url=new URL(match[1].replaceAll('&amp;','&'),pageUrl);if(url.hostname===root.hostname)links.push(url.toString());}catch{/* Ignore invalid links. */}
+  }
+  return [...new Set(links)];
+}
+
+function productsFromMenuPdf(pdfUrl,text){
+  const cleaned=String(text||'').replace(/\r/g,'\n').replace(/[ \t]+/g,' ');
+  const found=[];
+  const seen=new Set();
+  // Strongest case: name and Rs price share a line (common in restaurant PDFs).
+  const inline=/(?:^|\n)\s*([A-Za-z][A-Za-z0-9 &'()+,./-]{2,70}?)\s*(?:\.{2,}|\s{2,})?\s*Rs\.?\s*([0-9][0-9,]{1,6})\b/gim;
+  for(const match of cleaned.matchAll(inline)){
+    const name=match[1].replace(/\.{2,}/g,'').trim();
+    if(!name||/^(all prices|add |serving|full|half|menu|price)/i.test(name))continue;
+    const key=name.toLowerCase();if(seen.has(key))continue;seen.add(key);
+    found.push({name:name.slice(0,180),description:'Imported from the restaurant’s published menu PDF.',image_url:null,price:money(match[2]),currency:'PKR',source_url:pdfUrl,external_product_id:null,model_url:null,readiness:'needs-image'});
+  }
+  // Layout-based PDFs often put item lines first and their price lines immediately after.
+  if(found.length<6){
+    const lines=cleaned.split(/\n+/).map(line=>line.trim()).filter(Boolean);
+    for(let i=0;i<lines.length-1;i+=1){
+      const name=lines[i].replace(/\.{2,}/g,'').trim();
+      const priceLine=lines[i+1];
+      const price=priceLine.match(/^Rs\.?\s*([0-9][0-9,]{1,6})(?:\s|$)/i);
+      if(!price||name.length<3||name.length>80||/^(all prices|serving|full|half|menu|rs\.|[0-9])/i.test(name))continue;
+      const key=name.toLowerCase();if(seen.has(key))continue;seen.add(key);
+      found.push({name:name.slice(0,180),description:'Imported from the restaurant’s published menu PDF.',image_url:null,price:money(price[1]),currency:'PKR',source_url:pdfUrl,external_product_id:null,model_url:null,readiness:'needs-image'});
+      if(found.length>=16)break;
+    }
+  }
+  return found.slice(0,16);
+}
+
 export default async function handler(request,response){
   if(request.method!=='POST')return response.status(405).json({detail:'Method not allowed.'});
   try{
@@ -91,6 +140,12 @@ export default async function handler(request,response){
     }
     const dedup=new Map();
     for(const page of pages)for(const product of productsFromPage(page.url,page.html)){const key=String(product.external_product_id||product.source_url||product.name).toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
+    if(!dedup.size){
+      const menus=pdfLinks(start.url,start.html);
+      for(const menuUrl of menus.slice(0,2)){
+        try{const menu=await getPdf(menuUrl);for(const product of productsFromMenuPdf(menu.url,menu.text)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}}catch{/* Continue to another published menu. */}
+      }
+    }
     const products=[...dedup.values()].slice(0,16);
     if(!products.length)return response.status(422).json({detail:'The website responded, but no structured products were found. Try a direct store or collection page.'});
     const host=new URL(start.url).hostname.replace(/^www\./,'');
