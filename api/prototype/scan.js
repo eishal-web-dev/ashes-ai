@@ -133,11 +133,15 @@ function productsFromMenuPdf(pdfUrl,text){
 
 async function findFoodReference(name){
   try{
-    const params=new URLSearchParams({action:'query',format:'json',origin:'*',generator:'search',gsrnamespace:'6',gsrlimit:'1',gsrsearch:`${name} food`,prop:'imageinfo',iiprop:'url|extmetadata',iiurlwidth:'900'});
+    const searchName=name.replace(/\([^)]*\)/g,'').replace(/\b(baranh|special|pcs?|full|half)\b/gi,'').replace(/\s+/g,' ').trim();
+    const params=new URLSearchParams({action:'query',format:'json',origin:'*',generator:'search',gsrnamespace:'6',gsrlimit:'3',gsrsearch:`${searchName} dish filetype:bitmap`,prop:'imageinfo',iiprop:'url|mime|extmetadata',iiurlwidth:'900'});
     const response=await fetch(`https://commons.wikimedia.org/w/api.php?${params}`,{signal:AbortSignal.timeout(6500),headers:{'user-agent':USER_AGENT}});
     if(!response.ok)return null;
     const data=await response.json();
-    const page=Object.values(data.query?.pages||{})[0];
+    const page=Object.values(data.query?.pages||{}).find(candidate=>{
+      const info=candidate?.imageinfo?.[0];
+      return info?.mime?.startsWith('image/')&&!/\.(pdf|svg|djvu)$/i.test(candidate.title||'');
+    });
     const info=page?.imageinfo?.[0];
     const url=info?.thumburl||info?.url;
     if(!url||!/^https:\/\/upload\.wikimedia\.org\//i.test(url))return null;
