@@ -23,7 +23,7 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
   if(params.get('preview')==='1'&&params.get('name')){
    const parsedPrice=Number(params.get('price'));const shared={name:params.get('name').slice(0,180),image_url:safeSharedImage(params.get('image')),price:Number.isFinite(parsedPrice)&&parsedPrice>=0?parsedPrice:null,currency:/^[A-Z]{3}$/.test(params.get('currency')||'')?params.get('currency'):'USD',description:'Shared Ashes interactive product preview.'};
    setResult({mode:'shared',merchant:'Shared Ashes experience',found:1,products:[shared]});setStatus('ready');setTwinProduct(shared);
-  }
+  }else if(params.get('demo')==='1')setTimeout(()=>useShowcase('Instant showcase selected.'),0);
   return()=>timers.current.forEach(clearTimeout);
  },[]);
 
@@ -57,6 +57,7 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
     <Globe2 size={20}/><input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://merchant-website.com" aria-label="Merchant website URL"/>
     <button type="submit">Build catalog <ArrowRight size={17}/></button>
    </form>}
+   {status==='idle'&&<button className="instant-showcase" onClick={()=>{window.history.replaceState({},'','/prototype?demo=1');useShowcase('Instant showcase selected.')}}><Sparkles size={14}/> Skip the scan — open instant showcase <ArrowRight size={14}/></button>}
    {status==='idle'&&<div className="prototype-trust"><span><ShieldCheck size={14}/> Read-only preview</span><span><ScanLine size={14}/> Public URLs only</span><span><Box size={14}/> Nothing published automatically</span></div>}
    {error&&status==='idle'&&<div className="prototype-error">{error}</div>}
   </section>
@@ -81,7 +82,7 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
      </div>
     </article>
    </div>
-   <footer className="prototype-next"><span>CHUNK 3 · LIVE</span><div><Rotate3D/><p><b>Interactive twins + smart QR</b>Open any product, rotate its spatial preview and generate a direct scan link.</p></div></footer>
+   <footer className="prototype-next"><span>CHUNK 5 · LAUNCH READY</span><div><Rotate3D/><p><b>Interactive twins + smart QR</b>Open any product, rotate its spatial preview and generate a direct scan link.</p></div></footer>
   </section>}
   {twinProduct&&<PrototypeProductTwin product={twinProduct} onClose={()=>{setTwinProduct(null);if(new URLSearchParams(window.location.search).get('preview'))window.history.replaceState({},'','/prototype')}}/>}
  </main>
