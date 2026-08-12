@@ -72,19 +72,19 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
   </section>}
 
   {status==='ready'&&item&&<section className="prototype-results">
-   <header><div><span className="prototype-kicker">{result.mode==='live'?'LIVE CATALOG EXTRACT':'CURATED FALLBACK'}</span><h2>{merchant}</h2><p>{result.found} products prepared as reviewable Ashes drafts.</p></div><div className="result-actions"><button onClick={restart}>Scan another website</button><span><Check size={14}/> Extraction complete</span></div></header>
+   <header><div><span className="prototype-kicker">{result.mode==='live'?'LIVE CATALOG EXTRACT':'CURATED FALLBACK'}</span><h2>{merchant}</h2><p><b>{products.length} PRODUCTS FOUND</b> — select any item below to review it.</p></div><div className="result-actions"><button onClick={restart}>Scan another website</button><span><Check size={14}/> Extraction complete</span></div></header>
    {result.mode==='showcase'&&<div className="showcase-notice"><ShieldCheck size={17}/><div><strong>Showcase mode</strong><span>{error} The flow continues with clearly labelled sample products so the demo never dead-ends.</span></div></div>}
    <div className="prototype-workspace">
-    <aside className="prototype-catalog"><div className="catalog-title"><span>EXTRACTED CATALOG</span><b>{products.length}</b></div>{products.map((product,index)=><button className={selected===index?'active':''} onClick={()=>setSelected(index)} key={product.source_url||product.name}><img src={product.image_url} alt=""/><div><strong>{product.name}</strong><span>{money(product.price,product.currency)}</span></div><i>{String(index+1).padStart(2,'0')}</i></button>)}</aside>
+    <aside className="prototype-catalog"><div className="catalog-title"><span>{products.length} PRODUCTS FOUND · SELECT ANY</span><b>{products.length}</b></div>{products.map((product,index)=><button className={selected===index?'active':''} onClick={()=>setSelected(index)} key={product.source_url||product.name}><img src={product.image_url} alt=""/><div><strong>{product.name}</strong><span>{money(product.price,product.currency)}</span></div><i>{String(index+1).padStart(2,'0')}</i></button>)}</aside>
     <article className="prototype-product-stage">
      <div className="prototype-product-image"><div className="image-scan"/>{item.image_url?<img src={item.image_url} alt={item.name}/>:<div className="image-empty"><Image/><span>Image required</span></div>}<span className="draft-chip">DRAFT · NOT PUBLISHED</span></div>
      <div className="prototype-product-copy"><span>PRODUCT {String(selected+1).padStart(2,'0')}</span><h3>{item.name}</h3><strong>{money(item.price,item.currency)}</strong><p>{item.description||'Product information extracted from the merchant website and prepared for review.'}</p>
-      <div className="readiness-row"><div><Check size={15}/><span><b>Catalog data</b>Ready</span></div><div><Rotate3D size={15}/><span><b>3D preview</b>{item.model_url?'Original GLB':'Category reconstruction'}</span></div><div><QrCode size={15}/><span><b>Smart QR</b>Generate inside</span></div></div>
-      <div className="prototype-product-actions"><button className="primary-btn" onClick={()=>setTwinProduct(item)}>Open interactive twin <ArrowRight size={16}/></button>{item.source_url&&<a href={item.source_url} target="_blank" rel="noreferrer">Source <ExternalLink size={14}/></a>}</div>
+      <div className="readiness-row"><div><Check size={15}/><span><b>Catalog data</b>Ready</span></div><div><Rotate3D size={15}/><span><b>3D asset</b>{item.model_url?'Real GLB ready':item.image_url?'Photo-based preview only':'Product photo required'}</span></div><div><QrCode size={15}/><span><b>Smart QR</b>Generate inside</span></div></div>
+      <div className="prototype-product-actions"><button className="primary-btn" disabled={!item.model_url&&!item.image_url} onClick={()=>setTwinProduct(item)}>{item.model_url?'Open real 3D model':item.image_url?'Open spatial photo preview':'3D needs a product photo'} <ArrowRight size={16}/></button>{item.source_url&&<a href={item.source_url} target="_blank" rel="noreferrer">Source <ExternalLink size={14}/></a>}</div>
      </div>
     </article>
    </div>
-   <footer className="prototype-next"><span>CHUNK 5 · LAUNCH READY</span><div><Rotate3D/><p><b>Interactive twins + smart QR</b>Open any product, rotate its spatial preview and generate a direct scan link.</p></div></footer>
+   <footer className="prototype-next"><span>CATALOG IMPORT COMPLETE</span><div><Rotate3D/><p><b>Real 3D only when an asset exists</b>Products without a genuine model or usable photo are clearly marked instead of receiving fake geometry.</p></div></footer>
   </section>}
   {twinProduct&&<PrototypeProductTwin product={twinProduct} onClose={()=>{setTwinProduct(null);if(new URLSearchParams(window.location.search).get('preview'))window.history.replaceState({},'','/prototype')}}/>}
  </main>
