@@ -129,6 +129,35 @@ Every business-owned document is scoped by `business_id`.
 - Allergens must be confirmed by the business and should never be silently guessed.
 - Backend order totals are recalculated from stored product prices rather than trusted from the customer client.
 
+## Website-to-3D prototype
+
+The public prototype lives at `/prototype` and demonstrates the complete pitch flow:
+
+1. Paste a public merchant website URL.
+2. Extract a read-only product catalog.
+3. Open a rotatable interactive product twin.
+4. Generate and download a smart SVG QR code.
+5. Share a deep link that reopens the exact product experience.
+
+For a presentation or LinkedIn link, use `/prototype?demo=1`. It opens the curated showcase immediately, so the demo does not depend on a third-party website allowing automated catalog access.
+
+## Render deployment
+
+The repository includes a two-service Render Blueprint:
+
+- `ashes-web`: React/Vite static frontend with SPA rewrites.
+- `ashes-api`: FastAPI service with MongoDB, QR, catalog and commerce endpoints.
+
+After creating the Blueprint, set these minimum values:
+
+- Frontend `VITE_API_BASE_URL`: the deployed `ashes-api` URL.
+- API `MONGODB_URI`: the MongoDB Atlas connection string.
+- API `ASHES_ALLOWED_ORIGINS`: the deployed `ashes-web` origin.
+- API `ASHES_PUBLIC_BASE_URL`: the deployed frontend origin.
+- API `ASHES_API_BASE_URL`: the deployed API origin.
+
+Optional AI, storage and billing variables in `render.yaml` are required only for their corresponding production features.
+
 ## Development status
 
 Ashes has a MongoDB-backed MVP path with business auth, catalog management, AI menu import, product-photo-to-3D workflow, QR/table sessions, ordering, analytics, branding, notifications, and PWA support.
