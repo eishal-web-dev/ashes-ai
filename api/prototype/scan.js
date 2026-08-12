@@ -170,7 +170,7 @@ async function findFoodReference(name){
     const data=await response.json();
     const important=searchName.toLowerCase().split(/\s+/).filter(token=>token.length>3&&!['special','chicken','mutton','food'].includes(token));
     const pages=Object.values(data.query?.pages||{}).filter(page=>page.thumbnail?.source&&!/list of|disambiguation/i.test(page.title||''));
-    const page=pages.find(candidate=>important.some(token=>(candidate.title||'').toLowerCase().includes(token)))||pages[0];
+    const page=pages.find(candidate=>important.some(token=>(candidate.title||'').toLowerCase().includes(token)));
     const url=page?.thumbnail?.source;
     if(!url||!/^https:\/\/upload\.wikimedia\.org\//i.test(url))return null;
     return {image_url:url,image_source_url:page.fullurl||null,image_credit:'Wikipedia / Wikimedia Commons reference'};
