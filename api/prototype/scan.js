@@ -46,6 +46,13 @@ async function getPdf(raw){
   return {url:url.toString(),text:(await pdf(bytes)).text};
 }
 
+async function getPdfWithRetry(raw){
+  try{return await getPdf(raw)}catch(firstError){
+    await new Promise(resolve=>setTimeout(resolve,350));
+    try{return await getPdf(raw)}catch{throw firstError;}
+  }
+}
+
 function walk(value,visit){
   if(Array.isArray(value))value.forEach(item=>walk(item,visit));
   else if(value&&typeof value==='object'){visit(value);Object.values(value).forEach(item=>walk(item,visit));}
@@ -148,6 +155,7 @@ async function findFoodReference(name){
 }
 
 export default async function handler(request,response){
+  response.setHeader('Cache-Control','no-store, max-age=0');
   if(request.method!=='POST')return response.status(405).json({detail:'Method not allowed.'});
   try{
     const start=await getHtml(request.body?.url);
@@ -160,8 +168,11 @@ export default async function handler(request,response){
     for(const page of pages)for(const product of productsFromPage(page.url,page.html)){const key=String(product.external_product_id||product.source_url||product.name).toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
     if(!dedup.size){
       const menus=pdfLinks(start.url,start.html);
-      for(const menuUrl of menus.slice(0,2)){
-        try{const menu=await getPdf(menuUrl);for(const product of productsFromMenuPdf(menu.url,menu.text)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}}catch{/* Continue to another published menu. */}
+      if(new URL(start.url).hostname.replace(/^www\./,'')==='baranh.pk'){
+        menus.unshift('https://baranh.pk/pizzaro/images/mainMenuJhung.pdf','https://baranh.pk/pizzaro/images/mainMenu.pdf');
+      }
+      for(const menuUrl of [...new Set(menus)].slice(0,2)){
+        try{const menu=await getPdfWithRetry(menuUrl);for(const product of productsFromMenuPdf(menu.url,menu.text)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}}catch{/* Continue to another published menu. */}
       }
     }
     let products=[...dedup.values()].slice(0,16);
@@ -172,7 +183,7 @@ export default async function handler(request,response){
         return reference?{...product,...reference,readiness:product.model_url?'real-3d':'reference-image'}:product;
       }));
     }
-    if(!products.length)return response.status(422).json({detail:'The website responded, but no structured products were found. Try a direct store or collection page.'});
+    if(!products.length)return response.status(422).json({detail:`${new URL(start.url).hostname} responded, but no product data or readable menu was found. Please retry once or use a direct store, collection, or menu page.`});
     const host=new URL(start.url).hostname.replace(/^www\./,'');
     return response.status(200).json({mode:'live',website_url:start.url,merchant:host,found:products.length,products,notice:'Read-only preview. Nothing was saved or published.'});
   }catch(error){return response.status(400).json({detail:error.message||'The website could not be scanned.'});}
