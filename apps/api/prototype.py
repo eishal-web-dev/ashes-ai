@@ -33,6 +33,7 @@ def scan_prototype_catalog(payload: PrototypeScanPayload) -> dict:
         name = str(item.get("name") or "Imported product").strip()[:180]
         image = item.get("image_url")
         source = item.get("source_url")
+        model = item.get("model_url")
         cleaned.append({
             "name": name,
             "description": str(item.get("description") or "").strip()[:320] or None,
@@ -40,8 +41,9 @@ def scan_prototype_catalog(payload: PrototypeScanPayload) -> dict:
             "price": item.get("price"),
             "currency": item.get("currency") or "USD",
             "source_url": source if isinstance(source, str) else safe_url,
+            "model_url": model if isinstance(model, str) else None,
             "external_product_id": item.get("external_product_id"),
-            "readiness": "image-ready" if image else "needs-image",
+            "readiness": "real-3d" if model else ("image-ready" if image else "needs-image"),
         })
 
     if not cleaned:
