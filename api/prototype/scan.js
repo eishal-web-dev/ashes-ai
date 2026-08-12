@@ -131,6 +131,20 @@ function productsFromMenuPdf(pdfUrl,text){
   return found.slice(0,16);
 }
 
+async function findFoodReference(name){
+  try{
+    const params=new URLSearchParams({action:'query',format:'json',origin:'*',generator:'search',gsrnamespace:'6',gsrlimit:'1',gsrsearch:`${name} food`,prop:'imageinfo',iiprop:'url|extmetadata',iiurlwidth:'900'});
+    const response=await fetch(`https://commons.wikimedia.org/w/api.php?${params}`,{signal:AbortSignal.timeout(6500),headers:{'user-agent':USER_AGENT}});
+    if(!response.ok)return null;
+    const data=await response.json();
+    const page=Object.values(data.query?.pages||{})[0];
+    const info=page?.imageinfo?.[0];
+    const url=info?.thumburl||info?.url;
+    if(!url||!/^https:\/\/upload\.wikimedia\.org\//i.test(url))return null;
+    return {image_url:url,image_source_url:info.descriptionurl||null,image_credit:String(info.extmetadata?.Artist?.value||'Wikimedia Commons').replace(/<[^>]+>/g,'').slice(0,180)};
+  }catch{return null;}
+}
+
 export default async function handler(request,response){
   if(request.method!=='POST')return response.status(405).json({detail:'Method not allowed.'});
   try{
@@ -148,7 +162,14 @@ export default async function handler(request,response){
         try{const menu=await getPdf(menuUrl);for(const product of productsFromMenuPdf(menu.url,menu.text)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}}catch{/* Continue to another published menu. */}
       }
     }
-    const products=[...dedup.values()].slice(0,16);
+    let products=[...dedup.values()].slice(0,16);
+    if(products.some(product=>!product.image_url)){
+      products=await Promise.all(products.map(async product=>{
+        if(product.image_url)return product;
+        const reference=await findFoodReference(product.name);
+        return reference?{...product,...reference,readiness:product.model_url?'real-3d':'reference-image'}:product;
+      }));
+    }
     if(!products.length)return response.status(422).json({detail:'The website responded, but no structured products were found. Try a direct store or collection page.'});
     const host=new URL(start.url).hostname.replace(/^www\./,'');
     return response.status(200).json({mode:'live',website_url:start.url,merchant:host,found:products.length,products,notice:'Read-only preview. Nothing was saved or published.'});
