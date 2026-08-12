@@ -77,7 +77,7 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
     <article className="prototype-product-stage">
      <div className="prototype-product-image"><div className="image-scan"/>{item.image_url?<img src={item.image_url} alt={item.name}/>:<div className="image-empty"><Image/><span>Image required</span></div>}<span className="draft-chip">DRAFT · NOT PUBLISHED</span></div>
      <div className="prototype-product-copy"><span>PRODUCT {String(selected+1).padStart(2,'0')}</span><h3>{item.name}</h3><strong>{money(item.price,item.currency)}</strong><p>{item.description||'Product information extracted from the merchant website and prepared for review.'}</p>
-      <div className="readiness-row"><div><Check size={15}/><span><b>Catalog data</b>Ready</span></div><div><Rotate3D size={15}/><span><b>3D preview</b>{item.model_url?'Original GLB':'Generated fallback'}</span></div><div><QrCode size={15}/><span><b>Smart QR</b>Generate inside</span></div></div>
+      <div className="readiness-row"><div><Check size={15}/><span><b>Catalog data</b>Ready</span></div><div><Rotate3D size={15}/><span><b>3D preview</b>{item.model_url?'Original GLB':'Category reconstruction'}</span></div><div><QrCode size={15}/><span><b>Smart QR</b>Generate inside</span></div></div>
       <div className="prototype-product-actions"><button className="primary-btn" onClick={()=>setTwinProduct(item)}>Open interactive twin <ArrowRight size={16}/></button>{item.source_url&&<a href={item.source_url} target="_blank" rel="noreferrer">Source <ExternalLink size={14}/></a>}</div>
      </div>
     </article>
