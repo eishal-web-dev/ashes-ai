@@ -5,9 +5,9 @@ import PrototypeProductTwin from './PrototypeProductTwin';
 const API_BASE=import.meta.env.VITE_API_BASE_URL||'http://localhost:8000';
 const STAGES=['Connecting to website','Reading product structure','Extracting catalog data','Preparing Ashes drafts'];
 const SHOWCASE=[
- {name:'Sculpted Lounge Chair',price:849,currency:'USD',image_url:'https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?auto=format&fit=crop&w=1000&q=85',description:'A soft architectural lounge chair prepared for an interactive product experience.',readiness:'image-ready'},
- {name:'Stone Pendant Light',price:289,currency:'USD',image_url:'https://images.unsplash.com/photo-1540932239986-30128078f3c5?auto=format&fit=crop&w=1000&q=85',description:'Hand-finished lighting with texture and scale customers can inspect before buying.',readiness:'image-ready'},
- {name:'Minimal Ceramic Set',price:124,currency:'USD',image_url:'https://images.unsplash.com/photo-1610701596007-11502861dcfa?auto=format&fit=crop&w=1000&q=85',description:'A tactile tabletop collection ready for the Ashes 3D pipeline.',readiness:'image-ready'},
+ {name:'Sculpted Lounge Chair',price:849,currency:'USD',image_url:'https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?auto=format&fit=crop&w=1000&q=85',model_url:'https://modelviewer.dev/assets/ShopifyModels/Chair.glb',description:'A production-quality furniture model customers can rotate, zoom and inspect from every angle.',readiness:'real-3d'},
+ {name:'Material Variant Sneaker',price:189,currency:'USD',image_url:'https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=1000&q=85',model_url:'https://modelviewer.dev/shared-assets/models/MaterialsVariantsShoe.glb',description:'A detailed commerce-ready footwear model with accurate geometry, materials and interactive inspection.',readiness:'real-3d'},
+ {name:'Interactive Store Assistant',price:124,currency:'USD',image_url:'https://images.unsplash.com/photo-1485827404703-89b55fcc595e?auto=format&fit=crop&w=1000&q=85',model_url:'https://modelviewer.dev/shared-assets/models/RobotExpressive.glb',description:'An animated GLB demonstration showing the same pipeline can support advanced interactive assets.',readiness:'real-3d'},
 ];
 
 function money(value,currency='USD'){if(value===null||value===undefined)return 'Price unavailable';try{return new Intl.NumberFormat('en',{style:'currency',currency}).format(value)}catch{return `${currency} ${value}`}}
