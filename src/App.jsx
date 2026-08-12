@@ -28,7 +28,7 @@ export default function App(){
  const params=useMemo(()=>new URLSearchParams(window.location.search),[]);
  const deepLinkedProductId=params.get('product'), tableCode=params.get('table'), menuBusinessSlug=params.get('business'), deepLinkedOrderId=params.get('order');
  const adminPath=window.location.pathname==='/admin',prototypePath=window.location.pathname==='/prototype'; const initialBusiness=getStoredBusiness(),initialUser=getStoredUser(),hasSession=Boolean(getToken()&&initialBusiness);
- const initialView=adminPath?'admin':(prototypePath?'prototype':deepLinkedOrderId?'track':(deepLinkedProductId?'product':(tableCode&&menuBusinessSlug?'menu':'home'))));
+ const initialView=adminPath?'admin':prototypePath?'prototype':deepLinkedOrderId?'track':deepLinkedProductId?'product':(tableCode&&menuBusinessSlug?'menu':'home');
  const[view,setView]=useState(initialView),[business,setBusiness]=useState(initialBusiness),[user,setUser]=useState(initialUser),[activeProductId,setActiveProductId]=useState(deepLinkedProductId||null),[trackingOrderId,setTrackingOrderId]=useState(deepLinkedOrderId||null),[customerBusinessSlug,setCustomerBusinessSlug]=useState(menuBusinessSlug||null),[customerTableCode,setCustomerTableCode]=useState(tableCode||'');
  const goHome=()=>{if(window.location.pathname!=='/'||window.location.search)window.history.replaceState({},'','/');setActiveProductId(null);setTrackingOrderId(null);setView('home')};
  const openPrototype=()=>{window.history.pushState({},'','/prototype');setView('prototype')};
