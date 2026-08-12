@@ -21,6 +21,7 @@ import apps.api.retail_products  # noqa: F401
 import apps.api.table_qr_routes  # noqa: F401
 import apps.api.order_operations  # noqa: F401
 import apps.api.commerce_sources  # noqa: F401
+import apps.api.prototype  # noqa: F401
 from apps.api.mongo_db import database
 
 
