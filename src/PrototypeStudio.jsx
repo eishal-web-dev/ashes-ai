@@ -11,6 +11,7 @@ const SHOWCASE=[
 ];
 
 function money(value,currency='USD'){if(value===null||value===undefined)return 'Price unavailable';try{return new Intl.NumberFormat('en',{style:'currency',currency}).format(value)}catch{return `${currency} ${value}`}}
+function safeSharedImage(value){if(!value)return null;try{const parsed=new URL(value);return ['http:','https:'].includes(parsed.protocol)?parsed.toString():null}catch{return null}}
 
 export default function PrototypeStudio({onBack,onOpenProduct}){
  const[url,setUrl]=useState(''),[status,setStatus]=useState('idle'),[stage,setStage]=useState(0),[result,setResult]=useState(null),[error,setError]=useState(''),[selected,setSelected]=useState(0),[twinProduct,setTwinProduct]=useState(null);
@@ -20,7 +21,7 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
  useEffect(()=>{
   const params=new URLSearchParams(window.location.search);
   if(params.get('preview')==='1'&&params.get('name')){
-   const shared={name:params.get('name'),image_url:params.get('image')||null,price:params.get('price')?Number(params.get('price')):null,currency:params.get('currency')||'USD',description:'Shared Ashes interactive product preview.'};
+   const parsedPrice=Number(params.get('price'));const shared={name:params.get('name').slice(0,180),image_url:safeSharedImage(params.get('image')),price:Number.isFinite(parsedPrice)&&parsedPrice>=0?parsedPrice:null,currency:/^[A-Z]{3}$/.test(params.get('currency')||'')?params.get('currency'):'USD',description:'Shared Ashes interactive product preview.'};
    setResult({mode:'shared',merchant:'Shared Ashes experience',found:1,products:[shared]});setStatus('ready');setTwinProduct(shared);
   }
   return()=>timers.current.forEach(clearTimeout);
