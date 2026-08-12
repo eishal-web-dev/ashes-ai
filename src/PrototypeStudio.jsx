@@ -11,7 +11,7 @@ const SHOWCASE=[
 ];
 
 function money(value,currency='USD'){if(value===null||value===undefined)return 'Price unavailable';try{return new Intl.NumberFormat('en',{style:'currency',currency}).format(value)}catch{return `${currency} ${value}`}}
-function safeSharedImage(value){if(!value)return null;try{const parsed=new URL(value);return ['http:','https:'].includes(parsed.protocol)?parsed.toString():null}catch{return null}}
+function safeRemoteAsset(value){if(!value)return null;try{const parsed=new URL(value);return ['http:','https:'].includes(parsed.protocol)?parsed.toString():null}catch{return null}}
 
 export default function PrototypeStudio({onBack,onOpenProduct}){
  const[url,setUrl]=useState(''),[status,setStatus]=useState('idle'),[stage,setStage]=useState(0),[result,setResult]=useState(null),[error,setError]=useState(''),[selected,setSelected]=useState(0),[twinProduct,setTwinProduct]=useState(null);
@@ -21,7 +21,7 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
  useEffect(()=>{
   const params=new URLSearchParams(window.location.search);
   if(params.get('preview')==='1'&&params.get('name')){
-   const parsedPrice=Number(params.get('price'));const shared={name:params.get('name').slice(0,180),image_url:safeSharedImage(params.get('image')),price:Number.isFinite(parsedPrice)&&parsedPrice>=0?parsedPrice:null,currency:/^[A-Z]{3}$/.test(params.get('currency')||'')?params.get('currency'):'USD',description:'Shared Ashes interactive product preview.'};
+   const parsedPrice=Number(params.get('price'));const shared={name:params.get('name').slice(0,180),image_url:safeRemoteAsset(params.get('image')),model_url:safeRemoteAsset(params.get('model')),price:Number.isFinite(parsedPrice)&&parsedPrice>=0?parsedPrice:null,currency:/^[A-Z]{3}$/.test(params.get('currency')||'')?params.get('currency'):'USD',description:'Shared Ashes interactive product preview.'};
    setResult({mode:'shared',merchant:'Shared Ashes experience',found:1,products:[shared]});setStatus('ready');setTwinProduct(shared);
   }else if(params.get('demo')==='1')setTimeout(()=>useShowcase('Instant showcase selected.'),0);
   return()=>timers.current.forEach(clearTimeout);
@@ -77,7 +77,7 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
     <article className="prototype-product-stage">
      <div className="prototype-product-image"><div className="image-scan"/>{item.image_url?<img src={item.image_url} alt={item.name}/>:<div className="image-empty"><Image/><span>Image required</span></div>}<span className="draft-chip">DRAFT · NOT PUBLISHED</span></div>
      <div className="prototype-product-copy"><span>PRODUCT {String(selected+1).padStart(2,'0')}</span><h3>{item.name}</h3><strong>{money(item.price,item.currency)}</strong><p>{item.description||'Product information extracted from the merchant website and prepared for review.'}</p>
-      <div className="readiness-row"><div><Check size={15}/><span><b>Catalog data</b>Ready</span></div><div><Rotate3D size={15}/><span><b>3D preview</b>Ready</span></div><div><QrCode size={15}/><span><b>Smart QR</b>Generate inside</span></div></div>
+      <div className="readiness-row"><div><Check size={15}/><span><b>Catalog data</b>Ready</span></div><div><Rotate3D size={15}/><span><b>3D preview</b>{item.model_url?'Original GLB':'Generated fallback'}</span></div><div><QrCode size={15}/><span><b>Smart QR</b>Generate inside</span></div></div>
       <div className="prototype-product-actions"><button className="primary-btn" onClick={()=>setTwinProduct(item)}>Open interactive twin <ArrowRight size={16}/></button>{item.source_url&&<a href={item.source_url} target="_blank" rel="noreferrer">Source <ExternalLink size={14}/></a>}</div>
      </div>
     </article>
