@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Box, Check, ExternalLink, Globe2, Image, LoaderCircle, QrCode, Rotate3D, ScanLine, ShieldCheck, Sparkles } from 'lucide-react';
 import PrototypeProductTwin from './PrototypeProductTwin';
 
-const API_BASE=import.meta.env.VITE_API_BASE_URL||'http://localhost:8000';
+const API_BASE=import.meta.env.VITE_API_BASE_URL||'';
 const STAGES=['Connecting to website','Reading product structure','Extracting catalog data','Preparing Ashes drafts'];
 const SHOWCASE=[
  {name:'Sculpted Lounge Chair',price:849,currency:'USD',image_url:'https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?auto=format&fit=crop&w=1000&q=85',model_url:'https://modelviewer.dev/assets/ShopifyModels/Chair.glb',description:'A production-quality furniture model customers can rotate, zoom and inspect from every angle.',readiness:'real-3d'},
@@ -40,7 +40,7 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
    const response=await fetch(`${API_BASE}/api/prototype/scan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:normalized,max_pages:8})});
    if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(typeof body.detail==='string'?body.detail:'This website blocked the live catalog scan.');}
    const data=await response.json();resetTimers();setStage(3);setResult(data);setStatus('ready');
-  }catch(err){useShowcase(err.message||'Live scanning is unavailable right now.');}
+  }catch(err){resetTimers();setStatus('idle');setStage(0);setResult(null);setError(err.message||'Live scanning is unavailable right now.');}
  };
  const restart=()=>{resetTimers();window.history.replaceState({},'','/prototype');setStatus('idle');setResult(null);setError('');setStage(0);setSelected(0);setTwinProduct(null)};
  const item=products[selected];
