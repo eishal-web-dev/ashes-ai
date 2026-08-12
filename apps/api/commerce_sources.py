@@ -59,6 +59,7 @@ class CatalogParser(HTMLParser):
         self.meta: dict[str, str] = {}
         self.links: list[str] = []
         self.scripts: list[str] = []
+        self.model_urls: list[str] = []
         self._jsonld = False
         self._script_buf: list[str] = []
 
@@ -70,6 +71,10 @@ class CatalogParser(HTMLParser):
             value = data.get("content", "").strip()
             if key and value: self.meta[key] = value
         if tag.lower() == "a" and data.get("href"): self.links.append(data["href"])
+        if tag.lower() in {"model-viewer", "a-entity", "source"}:
+            for key in ("src", "data-src", "gltf-model"):
+                candidate = data.get(key, "").strip()
+                if candidate and _looks_like_glb(candidate): self.model_urls.append(candidate)
         if tag.lower() == "script" and "ld+json" in data.get("type", "").lower():
             self._jsonld = True; self._script_buf = []
 
@@ -133,8 +138,30 @@ def _walk_json(value: Any):
         for v in value: yield from _walk_json(v)
 
 
+def _looks_like_glb(value: str) -> bool:
+    lowered = value.lower()
+    return ".glb" in lowered or "glb_draco" in lowered
+
+
+def _extract_model_urls(url: str, html: str, parser: CatalogParser) -> list[str]:
+    """Find GLB assets exposed in markup, JSON state, or model-viewer elements."""
+    candidates = list(parser.model_urls)
+    # Commerce sites commonly serialize model URLs as JSON with escaped slashes.
+    normalized = html.replace("\\/", "/").replace("\\u002F", "/").replace("\\u002f", "/")
+    candidates.extend(re.findall(r"https?://[^\"'<>\\s]+?(?:\.glb(?:\?[^\"'<>\\s]*)?|glb_draco[^\"'<>\\s]*)", normalized, re.I))
+
+    resolved: list[str] = []
+    for candidate in candidates:
+        model_url = urljoin(url, candidate).replace("&amp;", "&")
+        parsed = urlparse(model_url)
+        if parsed.scheme in {"http", "https"} and parsed.netloc and _looks_like_glb(model_url):
+            resolved.append(model_url)
+    return list(dict.fromkeys(resolved))
+
+
 def _extract_product(url: str, html: str) -> tuple[Optional[dict], list[str]]:
     parser = CatalogParser(); parser.feed(html)
+    model_urls = _extract_model_urls(url, html, parser)
     candidates: list[dict] = []
     for script in parser.scripts:
         try: obj = json.loads(script)
@@ -154,6 +181,7 @@ def _extract_product(url: str, html: str) -> tuple[Optional[dict], list[str]]:
                 "currency": offers.get("priceCurrency") if isinstance(offers, dict) else None,
                 "external_product_id": node.get("sku") or node.get("productID") or node.get("mpn"),
                 "source_url": url,
+                "model_url": model_urls[0] if model_urls else None,
             })
     if candidates:
         product = next((x for x in candidates if x.get("name")), candidates[0])
@@ -161,7 +189,7 @@ def _extract_product(url: str, html: str) -> tuple[Optional[dict], list[str]]:
         name = parser.meta.get("og:title") or parser.meta.get("twitter:title") or parser.title.strip()
         price = _money(parser.meta.get("product:price:amount") or parser.meta.get("og:price:amount"))
         image = parser.meta.get("og:image") or parser.meta.get("twitter:image")
-        product = {"name": name, "price": price, "image_url": image, "description": parser.meta.get("og:description"), "source_url": url} if price is not None else None
+        product = {"name": name, "price": price, "image_url": image, "description": parser.meta.get("og:description"), "source_url": url, "model_url": model_urls[0] if model_urls else None} if price is not None else None
     links = [urljoin(url, href) for href in parser.links]
     return product, links
 
@@ -241,7 +269,7 @@ def import_website_catalog(slug: str, payload: ImportPayload, user: dict = Depen
         existing = collection("products").find_one({"business_id": business["id"], "source_url": source_url}) if source_url else None
         if existing: continue
         row = mongo_create_product({"business_id": business["id"], "name": (item.get("name") or "Imported product")[:180], "category": "Imported", "price": float(item.get("price") or 0), "status": "awaiting-image", "is_published": False})
-        update_product(row["id"], business["id"], {"source_url": source_url, "checkout_url": source_url, "external_image_url": item.get("image_url"), "external_product_id": item.get("external_product_id"), "source_currency": item.get("currency"), "source_description": item.get("description"), "commerce_source_type": "website"})
+        update_product(row["id"], business["id"], {"source_url": source_url, "checkout_url": source_url, "external_image_url": item.get("image_url"), "external_model_url": item.get("model_url"), "external_product_id": item.get("external_product_id"), "source_currency": item.get("currency"), "source_description": item.get("description"), "commerce_source_type": "website"})
         created.append({"id": row["id"], **item})
     collection("commerce_imports").insert_one({"id": str(uuid.uuid4()), "business_id": business["id"], "url": payload.url, "found": len(products), "created": len(created), "created_at": now_iso()})
     return {"found": len(products), "created": len(created), "products": created, "message": "Imported products are Ashes drafts. Review them and add/confirm photos before publishing."}
