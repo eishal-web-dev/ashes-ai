@@ -2,8 +2,7 @@ import { Suspense, useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { ContactShadows, Environment, Float, OrbitControls } from '@react-three/drei';
 import { ArrowLeft, Box, Check, Copy, Download, LoaderCircle, QrCode, Rotate3D, Share2, Sparkles } from 'lucide-react';
-
-const API_BASE=import.meta.env.VITE_API_BASE_URL||'http://localhost:8000';
+import QRCode from 'qrcode';
 
 function TwinGeometry({name}){
  const kind=(name||'').toLowerCase();
@@ -16,7 +15,7 @@ function TwinGeometry({name}){
 export default function PrototypeProductTwin({product,onClose}){
  const[copied,setCopied]=useState(false),[qrUrl,setQrUrl]=useState(''),[qrBusy,setQrBusy]=useState(false),[qrError,setQrError]=useState('');
  const shareUrl=useMemo(()=>{const u=new URL('/prototype',window.location.origin);u.searchParams.set('preview','1');u.searchParams.set('name',product.name||'Ashes product');if(product.image_url)u.searchParams.set('image',product.image_url);if(product.model_url)u.searchParams.set('model',product.model_url);if(product.price!=null)u.searchParams.set('price',String(product.price));u.searchParams.set('currency',product.currency||'USD');return u.toString()},[product]);
- const makeQr=async()=>{if(qrUrl)return;setQrBusy(true);setQrError('');try{const response=await fetch(`${API_BASE}/api/prototype/qr`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:shareUrl})});if(!response.ok)throw new Error('QR service is unavailable.');const blob=await response.blob();setQrUrl(URL.createObjectURL(blob))}catch(e){setQrError(e.message)}finally{setQrBusy(false)}};
+ const makeQr=async()=>{if(qrUrl)return;setQrBusy(true);setQrError('');try{const svg=await QRCode.toString(shareUrl,{type:'svg',errorCorrectionLevel:'M',margin:2,width:320,color:{dark:'#09090b',light:'#ffffff'}});setQrUrl(URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'})))}catch(e){setQrError(e.message||'QR generation failed.')}finally{setQrBusy(false)}};
  const copy=async()=>{await navigator.clipboard.writeText(shareUrl);setCopied(true);setTimeout(()=>setCopied(false),1800)};
  const download=()=>{if(!qrUrl)return;const a=document.createElement('a');a.href=qrUrl;a.download=`${(product.name||'ashes-product').toLowerCase().replace(/[^a-z0-9]+/g,'-')}-qr.svg`;a.click()};
  return <section className="twin-overlay" role="dialog" aria-modal="true" aria-label={`3D preview for ${product.name}`}>
