@@ -27,6 +27,21 @@ import './final-ui.css';
 import './pricing-model.css';
 import './prototype-studio.css';
 
+
+// The public prototype changes rapidly during demos. Remove older PWA bundles on
+// this route so customers never see a stale product viewer after a deployment.
+if ('serviceWorker' in navigator && window.location.pathname.startsWith('/prototype')) {
+  Promise.all([
+    navigator.serviceWorker.getRegistrations().then(registrations=>Promise.all(registrations.map(registration=>registration.unregister()))),
+    'caches' in window ? caches.keys().then(keys=>Promise.all(keys.filter(key=>/workbox|precache|ashes/i.test(key)).map(key=>caches.delete(key)))) : Promise.resolve()
+  ]).then(()=>{
+    if(navigator.serviceWorker.controller&&!sessionStorage.getItem('ashes-prototype-cache-cleared')){
+      sessionStorage.setItem('ashes-prototype-cache-cleared','1');
+      window.location.reload();
+    }
+  });
+}
+
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <App />
