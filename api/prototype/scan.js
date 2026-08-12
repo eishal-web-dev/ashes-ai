@@ -159,6 +159,13 @@ export default async function handler(request,response){
   if(request.method!=='POST')return response.status(405).json({detail:'Method not allowed.'});
   try{
     const start=await getHtml(request.body?.url);
+    const source=new URL(start.url);
+    const sourceHost=source.hostname.replace(/^www\./,'');
+    if(sourceHost==='qr.finedinemenu.com'&&(source.pathname==='/'||source.pathname==='')){
+      return response.status(422).json({
+        detail:'This is FineDine’s homepage, not a restaurant menu. Paste the complete link from the restaurant QR code, including the restaurant name and menu ID (for example: qr.finedinemenu.com/restaurant-name/menu/abc123).'
+      });
+    }
     const limit=Math.max(1,Math.min(Number(request.body?.max_pages)||8,16));
     const pages=[start];
     for(const link of productLinks(start.url,start.html).slice(0,limit)){
@@ -184,7 +191,7 @@ export default async function handler(request,response){
       }));
     }
     if(!products.length)return response.status(422).json({detail:`${new URL(start.url).hostname} responded, but no product data or readable menu was found. Please retry once or use a direct store, collection, or menu page.`});
-    const host=new URL(start.url).hostname.replace(/^www\./,'');
+    const host=sourceHost;
     return response.status(200).json({mode:'live',website_url:start.url,merchant:host,found:products.length,products,notice:'Read-only preview. Nothing was saved or published.'});
   }catch(error){return response.status(400).json({detail:error.message||'The website could not be scanned.'});}
 }
