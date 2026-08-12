@@ -25,6 +25,7 @@ import './merchant-operations.css';
 import './commerce-sources.css';
 import './final-ui.css';
 import './pricing-model.css';
+import './prototype-studio.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
