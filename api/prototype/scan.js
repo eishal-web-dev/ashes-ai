@@ -105,26 +105,28 @@ function productsFromMenuPdf(pdfUrl,text){
   const cleaned=String(text||'').replace(/\r/g,'\n').replace(/[ \t]+/g,' ');
   const found=[];
   const seen=new Set();
+  const add=(rawName,rawPrice)=>{
+    const name=String(rawName||'').replace(/\.{2,}/g,'').replace(/\s+/g,' ').trim();
+    if(!name||name.length<3||name.length>80||/rs\s*\.?\s*\d/i.test(name)||/^(all prices|add |serving|full|half|menu|price|seasonal|please ask)/i.test(name))return;
+    const key=name.toLowerCase();if(seen.has(key))return;seen.add(key);
+    found.push({name:name.slice(0,180),description:'Imported from the restaurant’s published menu PDF.',image_url:null,price:money(rawPrice),currency:'PKR',source_url:pdfUrl,external_product_id:null,model_url:null,readiness:'needs-image'});
+  };
   // Strongest case: name and Rs price share a line (common in restaurant PDFs).
   const inline=/(?:^|\n)\s*([A-Za-z][A-Za-z0-9 &'()+,./-]{2,70}?)\s*(?:\.{2,}|\s{2,})?\s*Rs\.?\s*([0-9][0-9,]{1,6})\b/gim;
-  for(const match of cleaned.matchAll(inline)){
-    const name=match[1].replace(/\.{2,}/g,'').trim();
-    if(!name||/^(all prices|add |serving|full|half|menu|price)/i.test(name))continue;
-    const key=name.toLowerCase();if(seen.has(key))continue;seen.add(key);
-    found.push({name:name.slice(0,180),description:'Imported from the restaurant’s published menu PDF.',image_url:null,price:money(match[2]),currency:'PKR',source_url:pdfUrl,external_product_id:null,model_url:null,readiness:'needs-image'});
-  }
-  // Layout-based PDFs often put item lines first and their price lines immediately after.
-  if(found.length<6){
-    const lines=cleaned.split(/\n+/).map(line=>line.trim()).filter(Boolean);
-    for(let i=0;i<lines.length-1;i+=1){
-      const name=lines[i].replace(/\.{2,}/g,'').trim();
-      const priceLine=lines[i+1];
-      const price=priceLine.match(/^Rs\.?\s*([0-9][0-9,]{1,6})(?:\s|$)/i);
-      if(!price||name.length<3||name.length>80||/^(all prices|serving|full|half|menu|rs\.|[0-9])/i.test(name))continue;
-      const key=name.toLowerCase();if(seen.has(key))continue;seen.add(key);
-      found.push({name:name.slice(0,180),description:'Imported from the restaurant’s published menu PDF.',image_url:null,price:money(price[1]),currency:'PKR',source_url:pdfUrl,external_product_id:null,model_url:null,readiness:'needs-image'});
-      if(found.length>=16)break;
+  for(const match of cleaned.matchAll(inline))add(match[1],match[2]);
+  // Many designed menus serialize a run of dotted item names followed by a run of prices.
+  const lines=cleaned.split(/\n+/).map(line=>line.trim()).filter(Boolean);
+  for(let i=0;i<lines.length;){
+    const names=[];
+    while(i<lines.length&&/^[A-Za-z].*\.{2,}/.test(lines[i])&&!/Rs\s*\.?\s*\d/i.test(lines[i])){names.push(lines[i]);i+=1;}
+    if(!names.length){i+=1;continue;}
+    const prices=[];
+    while(i<lines.length&&prices.length<names.length){
+      const price=lines[i].match(/^Rs\s*\.?\s*([0-9][0-9,]{1,6})(?:\s|\(|$)/i);
+      if(!price)break;
+      prices.push(price[1]);i+=1;
     }
+    if(prices.length===names.length)names.forEach((name,index)=>add(name,prices[index]));
   }
   return found.slice(0,16);
 }
