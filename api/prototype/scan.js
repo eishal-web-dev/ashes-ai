@@ -110,17 +110,22 @@ function pdfLinks(pageUrl,html){
 
 function productsFromMenuPdf(pdfUrl,text){
   const cleaned=String(text||'').replace(/\r/g,'\n').replace(/[ \t]+/g,' ');
+  const documentCurrency=/£/.test(cleaned)?'GBP':(/\bRs\.?\s*\d/i.test(cleaned)?'PKR':'USD');
   const found=[];
   const seen=new Set();
   const add=(rawName,rawPrice)=>{
     const name=String(rawName||'').replace(/\.{2,}/g,'').replace(/\s+/g,' ').trim();
     if(!name||name.length<3||name.length>80||/rs\s*\.?\s*\d/i.test(name)||/^(all prices|add |serving|full|half|menu|price|seasonal|please ask)/i.test(name))return;
     const key=name.toLowerCase();if(seen.has(key))return;seen.add(key);
-    found.push({name:name.slice(0,180),description:'Imported from the restaurant’s published menu PDF.',image_url:null,price:money(rawPrice),currency:'PKR',source_url:pdfUrl,external_product_id:null,model_url:null,readiness:'needs-image'});
+    found.push({name:name.slice(0,180),description:'Imported from the restaurant’s published menu PDF.',image_url:null,price:money(rawPrice),currency:documentCurrency,source_url:pdfUrl,external_product_id:null,model_url:null,readiness:'needs-image'});
   };
   // Strongest case: name and Rs price share a line (common in restaurant PDFs).
   const inline=/(?:^|\n)\s*([A-Za-z][A-Za-z0-9 &'()+,./-]{2,70}?)\s*(?:\.{2,}|\s{2,})?\s*Rs\.?\s*([0-9][0-9,]{1,6})\b/gim;
   for(const match of cleaned.matchAll(inline))add(match[1],match[2]);
+  // UK and international menus commonly use a dish name followed by a decimal
+  // price, with the currency symbol shown once elsewhere in the document.
+  const decimal=/(?:^|\n)\s*([A-Za-z][A-Za-z0-9 &'’()+,./-]{2,80}?)\s+(?:£\s*)?([0-9]{1,3}\.\d{2})(?=\s|$)/gim;
+  for(const match of cleaned.matchAll(decimal))add(match[1],match[2]);
   // Many designed menus serialize a run of dotted item names followed by a run of prices.
   const lines=cleaned.split(/\n+/).map(line=>line.trim()).filter(Boolean);
   for(let i=0;i<lines.length;){
