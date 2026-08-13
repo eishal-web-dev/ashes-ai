@@ -164,7 +164,8 @@ async function productsFromMenuImages(pageUrl,imageUrls){
   if(!imageUrls.length)return {products:[],error:null};
   const prompt=`Read these published restaurant menu pages and return JSON only: {"products":[{"name":"","description":"","price":0,"currency":"PKR","menu_image_index":0}]}. Extract only visible products. Do not invent text. menu_image_index is zero-based and identifies the supplied menu page containing that product. Preserve the printed currency; use PKR for Rs. Return at most 16 products, prioritizing products with clear names and prices.`;
   let result=await requestGrokVision(prompt,imageUrls);
-  if(result.error&&String(process.env.OPENAI_API_KEY||'').trim())result=await requestOpenAIVision(prompt,imageUrls);
+  const grokUnavailable=result.error==='XAI_API_KEY_MISSING'||/^XAI_API_5\d\d/.test(result.error||'');
+  if(grokUnavailable&&String(process.env.OPENAI_API_KEY||'').trim())result=await requestOpenAIVision(prompt,imageUrls);
   if(result.error)return {products:[],error:result.error};
   const data=result.data;
   const raw=responseText(data).replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
