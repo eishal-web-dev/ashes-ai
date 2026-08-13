@@ -138,20 +138,21 @@ function responseText(data){
 
 async function productsFromMenuImages(pageUrl,imageUrls){
   const key=String(process.env.OPENAI_API_KEY||'').trim();
-  if(!key||!imageUrls.length)return [];
+  if(!key||!imageUrls.length)return {products:[],error:key?null:'VISION_API_KEY_MISSING'};
   const prompt=`Read these published restaurant menu pages and return JSON only: {"products":[{"name":"","description":"","price":0,"currency":"PKR","menu_image_index":0}]}. Extract only visible products. Do not invent text. menu_image_index is zero-based and identifies the supplied menu page containing that product. Preserve the printed currency; use PKR for Rs. Return at most 16 products, prioritizing products with clear names and prices.`;
   const content=[{type:'input_text',text:prompt},...imageUrls.map(image_url=>({type:'input_image',image_url,detail:'high'}))];
-  const upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:AbortSignal.timeout(45000),headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.ASHES_MENU_VISION_MODEL||'gpt-5.5',input:[{role:'user',content}],max_output_tokens:4000})});
-  if(!upstream.ok)return [];
+  const upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:AbortSignal.timeout(45000),headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.ASHES_MENU_VISION_MODEL||'gpt-4.1-mini',input:[{role:'user',content}],max_output_tokens:4000})});
+  if(!upstream.ok)return {products:[],error:`VISION_API_${upstream.status}`};
   const data=await upstream.json();
   const raw=responseText(data).replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
-  let parsed;try{parsed=JSON.parse(raw);}catch{return [];}
-  return (Array.isArray(parsed.products)?parsed.products:[]).map((item,index)=>{
+  let parsed;try{parsed=JSON.parse(raw);}catch{return {products:[],error:'VISION_RESPONSE_INVALID'};}
+  const products=(Array.isArray(parsed.products)?parsed.products:[]).map((item,index)=>{
     const imageIndex=Math.max(0,Math.min(imageUrls.length-1,Number(item.menu_image_index)||0));
     const name=String(item.name||'').trim().slice(0,180);
     if(!name)return null;
     return {name,description:String(item.description||'').trim().slice(0,320)||null,image_url:imageUrls[imageIndex],price:money(item.price),currency:/^[A-Z]{3}$/.test(item.currency||'')?item.currency:'PKR',source_url:pageUrl,external_product_id:`vision-${index}`,model_url:null,readiness:'menu-page-reference'};
   }).filter(Boolean).slice(0,16);
+  return {products,error:products.length?null:'VISION_FOUND_NO_PRODUCTS'};
 }
 
 function pdfLinks(pageUrl,html){
@@ -258,11 +259,13 @@ export default async function handler(request,response){
     if(!dedup.size){
       for(const page of pages)for(const product of productsFromMenuCards(page.url,page.html)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
     }
+    let visionError=null;
     if(!dedup.size){
       for(const page of pages){
         const images=menuImageLinks(page.url,page.html);
         if(!images.length)continue;
-        for(const product of await productsFromMenuImages(page.url,images)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
+        const vision=await productsFromMenuImages(page.url,images);visionError=vision.error;
+        for(const product of vision.products){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
         if(dedup.size)break;
       }
     }
@@ -283,7 +286,7 @@ export default async function handler(request,response){
         return reference?{...product,...reference,readiness:product.model_url?'real-3d':'reference-image'}:product;
       }));
     }
-    if(!products.length)return response.status(422).json({detail:`${new URL(start.url).hostname} responded, but its catalog could not be read automatically. It may require a location, login, CAPTCHA, or block automated access.`,code:'CATALOG_UNREADABLE',discovered_pages:pages.slice(1).map(page=>page.url)});
+    if(!products.length)return response.status(422).json({detail:visionError?`The menu pages were found, but vision extraction failed (${visionError}). Check the OpenAI key, API billing, and model access in Vercel.`:`${new URL(start.url).hostname} responded, but its catalog could not be read automatically. It may require a location, login, CAPTCHA, or block automated access.`,code:visionError||'CATALOG_UNREADABLE',discovered_pages:pages.slice(1).map(page=>page.url)});
     const host=sourceHost;
     return response.status(200).json({mode:'live',website_url:start.url,merchant:host,found:products.length,products,notice:'Read-only preview. Nothing was saved or published.'});
   }catch(error){return response.status(400).json({detail:error.message||'The website could not be scanned.'});}
