@@ -1,6 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import pdf from 'pdf-parse/lib/pdf-parse.js';
+import { productsFromMenuCards } from './menu-cards.js';
 
 const USER_AGENT='AshesCatalogBot/1.1 (+read-only prototype catalog scan)';
 
@@ -198,6 +199,9 @@ export default async function handler(request,response){
     for(const page of pages)for(const product of productsFromPage(page.url,page.html)){const key=String(product.external_product_id||product.source_url||product.name).toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
     if(!dedup.size){
       for(const product of productsFromMenuHtml(start.url,start.html)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
+    }
+    if(!dedup.size){
+      for(const product of productsFromMenuCards(start.url,start.html)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
     }
     if(!dedup.size){
       const menus=pdfLinks(start.url,start.html);
