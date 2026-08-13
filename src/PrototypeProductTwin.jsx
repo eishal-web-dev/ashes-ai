@@ -1,6 +1,4 @@
-import { Suspense, useMemo, useState } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { ContactShadows, Environment, Float, OrbitControls, Image as DreiImage, RoundedBox } from '@react-three/drei';
+import { useMemo, useState } from 'react';
 import { ArrowLeft, Box, Check, Copy, Download, LoaderCircle, QrCode, Rotate3D, Share2, Sparkles } from 'lucide-react';
 import QRCode from 'qrcode';
 
@@ -19,37 +17,16 @@ function TwinGeometry({name}){
  return <group rotation={[.08,-.35,0]}><mesh><boxGeometry args={[2.4,2.4,.75]}/><meshPhysicalMaterial color="#c2b59f" roughness={.28} metalness={.1}/></mesh><mesh position={[0,0,.4]}><boxGeometry args={[1.6,1.6,.04]}/><meshStandardMaterial color="#161618" emissive="#b9ff67" emissiveIntensity={.08}/></mesh></group>;
 }
 
-function PhotoTwin({product}){
- return <group rotation={[0,-.12,0]}>
-  <mesh position={[0,-1.42,0]} receiveShadow>
-   <cylinderGeometry args={[1.75,2.05,.2,96]}/>
-   <meshPhysicalMaterial color="#111315" metalness={.72} roughness={.2} clearcoat={1}/>
-  </mesh>
-  <mesh position={[0,-1.29,0]}>
-   <torusGeometry args={[1.55,.025,16,96]}/>
-   <meshStandardMaterial color="#b9ff67" emissive="#b9ff67" emissiveIntensity={2.4}/>
-  </mesh>
-  <RoundedBox args={[3.5,3.5,.18]} radius={.14} smoothness={8} position={[0,.25,-.12]} castShadow>
-   <meshPhysicalMaterial color="#17191b" metalness={.3} roughness={.18} clearcoat={.9}/>
-  </RoundedBox>
-  <DreiImage url={product.image_url} position={[0,.25,.01]} scale={[3.28,3.28]} radius={.1} transparent toneMapped/>
-  <mesh position={[0,.25,-.24]}>
-   <planeGeometry args={[3.85,3.85]}/>
-   <meshBasicMaterial color="#b9ff67" transparent opacity={.035}/>
-  </mesh>
- </group>;
-}
-
 export default function PrototypeProductTwin({product,onClose}){
  const[copied,setCopied]=useState(false),[qrUrl,setQrUrl]=useState(''),[qrBusy,setQrBusy]=useState(false),[qrError,setQrError]=useState('');
- const[generatedModel,setGeneratedModel]=useState(''),[generationState,setGenerationState]=useState('idle'),[generationProgress,setGenerationProgress]=useState(0),[generationError,setGenerationError]=useState('');
+ const[generatedModel,setGeneratedModel]=useState(''),[generationState,setGenerationState]=useState('idle'),[generationProgress,setGenerationProgress]=useState(0),[generationStage,setGenerationStage]=useState(''),[generatedViews,setGeneratedViews]=useState([]),[generationError,setGenerationError]=useState('');
  const assetModel=product.model_url||generatedModel;
  const shareUrl=useMemo(()=>{const u=new URL('/prototype',window.location.origin);u.searchParams.set('preview','1');u.searchParams.set('name',product.name||'Ashes product');if(product.image_url)u.searchParams.set('image',product.image_url);if(assetModel)u.searchParams.set('model',assetModel);if(product.price!=null)u.searchParams.set('price',String(product.price));u.searchParams.set('currency',product.currency||'USD');return u.toString()},[product,assetModel]);
  const generate3d=async()=>{
   if(!product.image_url||generationState==='working')return;
   setGenerationState('working');setGenerationProgress(1);setGenerationError('');
   try{
-   const started=await fetch('/api/prototype/generate-3d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_url:product.image_url})});
+   const started=await fetch('/api/prototype/generate-3d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_url:product.image_url,product_name:product.name})});
    const startBody=await started.json().catch(()=>({}));
    if(!started.ok)throw new Error(startBody.detail||'Could not start real 3D generation.');
    for(let attempt=0;attempt<72;attempt+=1){
@@ -57,7 +34,7 @@ export default function PrototypeProductTwin({product,onClose}){
     const check=await fetch(`/api/prototype/generate-3d?id=${encodeURIComponent(startBody.task_id)}`,{cache:'no-store'});
     const task=await check.json().catch(()=>({}));
     if(!check.ok)throw new Error(task.detail||'Could not check the 3D generation.');
-    setGenerationProgress(Math.max(1,Math.min(99,Number(task.progress||attempt+2))));
+    setGenerationProgress(Math.max(1,Math.min(99,Number(task.progress||attempt+2))));setGenerationStage(task.stage||'RECONSTRUCTING_3D');if(Array.isArray(task.views))setGeneratedViews(task.views.slice(0,4));
     if(task.status==='SUCCEEDED'&&task.model_url){setGeneratedModel(task.model_url);setGenerationProgress(100);setGenerationState('done');return;}
     if(['FAILED','CANCELED','EXPIRED'].includes(task.status))throw new Error(task.error||`3D generation ${task.status.toLowerCase()}.`);
    }
@@ -72,19 +49,20 @@ export default function PrototypeProductTwin({product,onClose}){
    <header><button onClick={onClose}><ArrowLeft size={16}/> Catalog</button><span><i/> INTERACTIVE TWIN · LIVE</span></header>
    <div className="twin-layout">
     <div className="twin-canvas">
-     <div className="twin-hud"><span><Sparkles size={13}/> {assetModel?'REAL PRODUCT 3D · GLB':product.image_url?'SOURCE PHOTO · SPATIAL DISPLAY':'NO 3D ASSET'}</span><span><Rotate3D size={13}/> DRAG TO ROTATE</span></div>
-     {assetModel?<model-viewer src={assetModel} alt={`Interactive 3D model of ${product.name}`} camera-controls auto-rotate shadow-intensity="1" exposure="1" interaction-prompt="auto" style={{width:'100%',height:'100%',background:'#09090b'}}/>:product.image_url?<Canvas shadows dpr={[1,1.75]} camera={{position:[0,.45,6.4],fov:34}} gl={{antialias:true,toneMappingExposure:1.08}}><color attach="background" args={['#070809']}/><fog attach="fog" args={['#070809',7.5,12]}/><ambientLight intensity={.45}/><spotLight position={[4,7,5]} intensity={58} angle={.38} penumbra={.85} color="#fff5e8" castShadow/><pointLight position={[-4,1.5,3]} intensity={18} color="#b9ff67"/><pointLight position={[3,-1,2]} intensity={10} color="#7b61ff"/><Suspense fallback={null}><Float speed={.72} rotationIntensity={.035} floatIntensity={.12}><PhotoTwin product={product}/></Float><Environment preset="studio"/><ContactShadows position={[0,-1.55,0]} opacity={.72} scale={9} blur={2.8} far={5}/></Suspense><OrbitControls enablePan={false} enableDamping dampingFactor={.06} minDistance={4.8} maxDistance={8} minPolarAngle={Math.PI*.32} maxPolarAngle={Math.PI*.64} autoRotate autoRotateSpeed={.22}/></Canvas>:<div className="image-empty"><Box/><span>No real 3D model or product photo available</span></div>}
-     <div className="twin-badge"><Box size={15}/><span><b>{assetModel?'Real 3D asset':product.image_url?'Spatial photo preview':'3D unavailable'}</b>{assetModel?(product.model_url?'Loaded from the merchant product page':'Generated from the source product image'):product.image_url?'Displays the source product photo without inventing geometry':'A real model requires product photography or a GLB file'}</span></div>
+     <div className="twin-hud"><span><Sparkles size={13}/> {assetModel?'REAL PRODUCT 3D · GLB':generationState==='working'?'BUILDING PRODUCT GEOMETRY':'SOURCE PHOTO · NOT 3D'}</span>{assetModel&&<span><Rotate3D size={13}/> DRAG TO ROTATE</span>}</div>
+     {assetModel?<model-viewer src={assetModel} alt={`Interactive 3D model of ${product.name}`} camera-controls auto-rotate shadow-intensity="1" exposure="1" interaction-prompt="auto" style={{width:'100%',height:'100%',background:'#09090b'}}/>:product.image_url?<div className="twin-honest-source"><img src={product.image_url} alt={`Source photograph of ${product.name}`}/><span>{generationState==='working'?`${generationStage.replaceAll('_',' ').toLowerCase()} · ${generationProgress}%`:'SOURCE IMAGE — GENERATE 3D TO ROTATE THE PRODUCT'}</span></div>:<div className="image-empty"><Box/><span>No real 3D model or product photo available</span></div>}
+     <div className="twin-badge"><Box size={15}/><span><b>{assetModel?'Real 3D asset':'No fake 3D preview'}</b>{assetModel?(product.model_url?'Loaded from the merchant product page':'Four views reconstructed by Ashes TRELLIS into a GLB'):'The source remains a flat photo until the GPU pipeline returns actual geometry'}</span></div>
     </div>
     <aside className="twin-panel">
      <span className="prototype-kicker">PRODUCT EXPERIENCE 03</span><h2>{product.name}</h2><p>{product.description||'An interactive Ashes product twin prepared from the imported catalog.'}</p>
      {product.image_url&&<div className="twin-source"><img src={product.image_url} alt="Product reference"/><span><b>{product.image_source_url?'Reference image':'Source product'}</b>{product.image_source_url?'Third-party reference — not the restaurant’s actual dish':'Displayed directly; no fake reconstruction'}</span></div>}
      {!assetModel&&product.image_url&&<div className="twin-real3d">
       <button className="twin-generate" onClick={generate3d} disabled={generationState==='working'}>{generationState==='working'?<LoaderCircle className="spin-icon"/>:<Sparkles/>}{generationState==='working'?(`Generating real 3D… ${generationProgress}%`):generationState==='error'?'Retry real 3D generation':'Generate real 3D from this image'}</button>
-      <small>AI reconstructs hidden sides, creates a textured mesh, then returns a genuine GLB model.</small>
+      <small>Ashes generates front, right, back and left views, then TRELLIS reconstructs and textures a genuine GLB mesh.</small>
+      {generatedViews.length>0&&<div className="twin-generated-views">{generatedViews.map((view,index)=><img key={view||index} src={view} alt={`Generated product view ${index+1}`}/>)}</div>}
      </div>}
      {generationError&&<small className="prototype-error">{generationError}</small>}
-     <div className="twin-status"><div><Check/><span><b>Catalog</b>Imported</span></div><div><Check/><span><b>Asset type</b>{assetModel?'Real interactive 3D':product.image_url?'Spatial photo preview':'No 3D asset'}</span></div><div className={qrUrl?'ready':''}><QrCode/><span><b>Smart QR</b>{qrUrl?'Generated':'Ready to generate'}</span></div></div>
+     <div className="twin-status"><div><Check/><span><b>Catalog</b>Imported</span></div><div><Check/><span><b>Asset type</b>{assetModel?'Real interactive 3D':product.image_url?'Source photo only':'No 3D asset'}</span></div><div className={qrUrl?'ready':''}><QrCode/><span><b>Smart QR</b>{qrUrl?'Generated':'Ready to generate'}</span></div></div>
      {!qrUrl?<button className="twin-generate" onClick={makeQr} disabled={qrBusy}>{qrBusy?<LoaderCircle className="spin-icon"/>:<QrCode/>}{qrBusy?'Generating smart QR…':'Generate product QR'}</button>:<div className="twin-qr"><img src={qrUrl} alt="QR code to this product preview"/><div><strong>SCAN TO OPEN THIS TWIN</strong><button onClick={copy}>{copied?<Check/>:<Copy/>}{copied?'Copied':'Copy link'}</button><button onClick={download}><Download/>Download SVG</button></div></div>}
      {qrError&&<small className="prototype-error">{qrError}</small>}
      <button className="twin-share" onClick={copy}><Share2 size={15}/>{copied?'Preview link copied':'Share preview link'}</button>
