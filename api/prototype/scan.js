@@ -134,6 +134,10 @@ function responseText(data){
   if(typeof data.output_text==='string')return data.output_text;
   if(typeof data.choices?.[0]?.message?.content==='string')return data.choices[0].message.content;
   if(typeof data.candidates?.[0]?.content?.parts?.[0]?.text==='string')return data.candidates[0].content.parts.map(part=>part.text||'').join('');
+  for(const step of [...(data.steps||[])].reverse()){
+    const text=(step.content||[]).map(part=>part?.text||'').join('');
+    if(text)return text;
+  }
   for(const item of data.output||[])for(const content of item.content||[])if(typeof content.text==='string')return content.text;
   return '';
 }
@@ -200,7 +204,8 @@ async function productsFromMenuImages(pageUrl,imageUrls){
   if(paidProvidersUnavailable&&String(process.env.OPENAI_API_KEY||'').trim())result=await requestOpenAIVision(prompt,imageUrls);
   if(result.error)return {products:[],error:result.error,providerMessage:result.providerMessage||null};
   const data=result.data;
-  const raw=responseText(data).replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
+  let raw=responseText(data).replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
+  if(!raw.startsWith('{')){const start=raw.indexOf('{');const end=raw.lastIndexOf('}');if(start>=0&&end>start)raw=raw.slice(start,end+1);}
   let parsed;try{parsed=JSON.parse(raw);}catch{return {products:[],error:'VISION_RESPONSE_INVALID'};}
   const products=(Array.isArray(parsed.products)?parsed.products:[]).map((item,index)=>{
     const imageIndex=Math.max(0,Math.min(imageUrls.length-1,Number(item.menu_image_index)||0));
