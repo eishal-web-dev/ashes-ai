@@ -24,14 +24,16 @@ function imageFromCard(pageUrl,html){
 
 export function productsFromMenuCards(pageUrl,html){
   const starts=[];
-  const cardPattern=/<(?:article|li|div)\b[^>]*class=["'][^"']*(?:card-lift|product-card|menu-item|food-card)[^"']*["'][^>]*>/gi;
+  const cardPattern=/<(?:article|li|div)\b[^>]*class=["'][^"']*(?:card-lift|product-card|product-item|menu-card|menu-item|food-card|food-item|item-card)[^"']*["'][^>]*>/gi;
   for(const match of html.matchAll(cardPattern))starts.push(match.index);
   const found=[];
   const seen=new Set();
   for(let index=0;index<starts.length;index+=1){
     const card=html.slice(starts[index],starts[index+1]??html.length);
     const heading=card.match(/<h[2-4]\b[^>]*>([\s\S]*?)<\/h[2-4]>/i);
-    const priceText=decodeText(card).match(/(?:Rs\.?|PKR)\s*([0-9][0-9,]*(?:\.\d+)?)/i);
+    const text=decodeText(card);
+    const priceText=text.match(/(Rs\.?|PKR|£|GBP|\$|USD|€|EUR|AED|SAR)\s*([0-9][0-9,]*(?:\.\d+)?)/i)
+      ||text.match(/([0-9][0-9,]*(?:\.\d+)?)\s*(PKR|GBP|USD|EUR|AED|SAR)\b/i);
     const name=decodeText(heading?.[1]);
     if(!name||name.length<3||name.length>180||!priceText)continue;
     const key=name.toLowerCase();
@@ -39,7 +41,10 @@ export function productsFromMenuCards(pageUrl,html){
     seen.add(key);
     const paragraph=card.match(/<p\b[^>]*>([\s\S]*?)<\/p>/i);
     const imageUrl=imageFromCard(pageUrl,card);
-    found.push({name,description:decodeText(paragraph?.[1]).slice(0,320)||null,image_url:imageUrl,price:money(priceText[1]),currency:'PKR',source_url:pageUrl,external_product_id:null,model_url:null,readiness:imageUrl?'image-ready':'needs-image'});
+    const token=(/\d/.test(priceText[1])?priceText[2]:priceText[1]).toUpperCase();
+    const currency=token.startsWith('RS')||token==='PKR'?'PKR':token==='£'||token==='GBP'?'GBP':token==='$'||token==='USD'?'USD':token==='€'||token==='EUR'?'EUR':token;
+    const priceValue=/\d/.test(priceText[1])?priceText[1]:priceText[2];
+    found.push({name,description:decodeText(paragraph?.[1]).slice(0,320)||null,image_url:imageUrl,price:money(priceValue),currency,source_url:pageUrl,external_product_id:null,model_url:null,readiness:imageUrl?'image-ready':'needs-image'});
   }
   return found.slice(0,16);
 }
