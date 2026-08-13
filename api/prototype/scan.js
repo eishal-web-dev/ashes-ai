@@ -132,18 +132,41 @@ export function menuImageLinks(pageUrl,html){
 
 function responseText(data){
   if(typeof data.output_text==='string')return data.output_text;
+  if(typeof data.choices?.[0]?.message?.content==='string')return data.choices[0].message.content;
   for(const item of data.output||[])for(const content of item.content||[])if(typeof content.text==='string')return content.text;
   return '';
 }
 
-async function productsFromMenuImages(pageUrl,imageUrls){
+function upstreamError(provider,status,data){
+  const reason=String(data?.error?.code||data?.error?.type||'').replace(/[^a-z0-9_-]/gi,'_').toUpperCase();
+  return `${provider}_API_${status}${reason?`_${reason}`:''}`;
+}
+
+async function requestGrokVision(prompt,imageUrls){
+  const key=String(process.env.XAI_API_KEY||'').trim();
+  if(!key)return {error:'XAI_API_KEY_MISSING'};
+  const content=[{type:'text',text:prompt},...imageUrls.map(url=>({type:'image_url',image_url:{url,detail:'high'}}))];
+  const upstream=await fetch('https://api.x.ai/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(60000),headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.ASHES_XAI_VISION_MODEL||'grok-4.6',messages:[{role:'user',content}],temperature:0,max_tokens:4000})});
+  const data=await upstream.json().catch(()=>({}));
+  return upstream.ok?{data}:{error:upstreamError('XAI',upstream.status,data)};
+}
+
+async function requestOpenAIVision(prompt,imageUrls){
   const key=String(process.env.OPENAI_API_KEY||'').trim();
-  if(!key||!imageUrls.length)return {products:[],error:key?null:'VISION_API_KEY_MISSING'};
-  const prompt=`Read these published restaurant menu pages and return JSON only: {"products":[{"name":"","description":"","price":0,"currency":"PKR","menu_image_index":0}]}. Extract only visible products. Do not invent text. menu_image_index is zero-based and identifies the supplied menu page containing that product. Preserve the printed currency; use PKR for Rs. Return at most 16 products, prioritizing products with clear names and prices.`;
+  if(!key)return {error:'OPENAI_API_KEY_MISSING'};
   const content=[{type:'input_text',text:prompt},...imageUrls.map(image_url=>({type:'input_image',image_url,detail:'high'}))];
-  const upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:AbortSignal.timeout(45000),headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.ASHES_MENU_VISION_MODEL||'gpt-4.1-mini',input:[{role:'user',content}],max_output_tokens:4000})});
-  if(!upstream.ok)return {products:[],error:`VISION_API_${upstream.status}`};
-  const data=await upstream.json();
+  const upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:AbortSignal.timeout(60000),headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.ASHES_MENU_VISION_MODEL||'gpt-4.1-mini',input:[{role:'user',content}],max_output_tokens:4000})});
+  const data=await upstream.json().catch(()=>({}));
+  return upstream.ok?{data}:{error:upstreamError('OPENAI',upstream.status,data)};
+}
+
+async function productsFromMenuImages(pageUrl,imageUrls){
+  if(!imageUrls.length)return {products:[],error:null};
+  const prompt=`Read these published restaurant menu pages and return JSON only: {"products":[{"name":"","description":"","price":0,"currency":"PKR","menu_image_index":0}]}. Extract only visible products. Do not invent text. menu_image_index is zero-based and identifies the supplied menu page containing that product. Preserve the printed currency; use PKR for Rs. Return at most 16 products, prioritizing products with clear names and prices.`;
+  let result=await requestGrokVision(prompt,imageUrls);
+  if(result.error&&String(process.env.OPENAI_API_KEY||'').trim())result=await requestOpenAIVision(prompt,imageUrls);
+  if(result.error)return {products:[],error:result.error};
+  const data=result.data;
   const raw=responseText(data).replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
   let parsed;try{parsed=JSON.parse(raw);}catch{return {products:[],error:'VISION_RESPONSE_INVALID'};}
   const products=(Array.isArray(parsed.products)?parsed.products:[]).map((item,index)=>{
@@ -286,7 +309,7 @@ export default async function handler(request,response){
         return reference?{...product,...reference,readiness:product.model_url?'real-3d':'reference-image'}:product;
       }));
     }
-    if(!products.length)return response.status(422).json({detail:visionError?`The menu pages were found, but vision extraction failed (${visionError}). Check the OpenAI key, API billing, and model access in Vercel.`:`${new URL(start.url).hostname} responded, but its catalog could not be read automatically. It may require a location, login, CAPTCHA, or block automated access.`,code:visionError||'CATALOG_UNREADABLE',discovered_pages:pages.slice(1).map(page=>page.url)});
+    if(!products.length)return response.status(422).json({detail:visionError?`The menu pages were found, but vision extraction failed (${visionError}). Check the matching provider key, API credits, and model access in Vercel.`:`${new URL(start.url).hostname} responded, but its catalog could not be read automatically. It may require a location, login, CAPTCHA, or block automated access.`,code:visionError||'CATALOG_UNREADABLE',discovered_pages:pages.slice(1).map(page=>page.url)});
     const host=sourceHost;
     return response.status(200).json({mode:'live',website_url:start.url,merchant:host,found:products.length,products,notice:'Read-only preview. Nothing was saved or published.'});
   }catch(error){return response.status(400).json({detail:error.message||'The website could not be scanned.'});}
