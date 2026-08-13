@@ -1,9 +1,9 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import pdf from 'pdf-parse/lib/pdf-parse.js';
 import { productsFromMenuCards } from './menu-cards.js';
 
 const USER_AGENT='AshesCatalogBot/1.1 (+read-only prototype catalog scan)';
+export const config={maxDuration:60};
 
 function privateIp(address){
   if(!isIP(address))return true;
@@ -37,6 +37,7 @@ async function getHtml(raw){
 }
 
 async function getPdf(raw){
+  const {default:pdf}=await import('pdf-parse/lib/pdf-parse.js');
   const url=await safeUrl(raw);
   const response=await fetch(url,{signal:AbortSignal.timeout(18000),headers:{'user-agent':USER_AGENT,accept:'application/pdf'}});
   if(!response.ok)throw new Error(`Menu PDF returned ${response.status}.`);
@@ -98,6 +99,59 @@ function productLinks(pageUrl,html){
     try{const url=new URL(match[1].replaceAll('&amp;','&'),pageUrl);if(url.hostname===root.hostname&&/(\/products?\/|\/p\/|\/item\/|\/shop\/)/i.test(url.pathname))links.push(url.toString().split('#')[0]);}catch{/* Ignore invalid links. */}
   }
   return [...new Set(links)];
+}
+
+export function catalogLinks(pageUrl,html){
+  const root=new URL(pageUrl);
+  const links=[];
+  for(const match of html.matchAll(/<a\b([^>]*)href=["']([^"'#]+)["']([^>]*)>([\s\S]*?)<\/a>/gi)){
+    try{
+      const url=new URL(match[2].replaceAll('&amp;','&'),pageUrl);
+      const label=decodeText(match[4]);
+      const attributes=`${match[1]} ${match[3]}`;
+      const looksRelevant=/(?:menu|shop|store|catalog|products?|order(?:\s+online)?)/i.test(`${label} ${url.pathname} ${attributes}`);
+      const relatedHost=url.hostname===root.hostname||url.hostname.endsWith(`.${root.hostname.replace(/^www\./,'')}`);
+      if(looksRelevant&&relatedHost&&['http:','https:'].includes(url.protocol))links.push(url.toString().split('#')[0]);
+    }catch{/* Ignore invalid discovery links. */}
+  }
+  return [...new Set(links)];
+}
+
+export function menuImageLinks(pageUrl,html){
+  const urls=[];
+  const pattern=/<a\b[^>]*href=["']([^"']+\.(?:png|jpe?g|webp)(?:\?[^"']*)?)["'][^>]*(?:data-elementor-lightbox-title=["'][^"']*menu[^"']*["']|class=["'][^"']*(?:gallery|menu)[^"']*["'])[^>]*>/gi;
+  for(const match of html.matchAll(pattern)){
+    try{urls.push(new URL(match[1].replaceAll('&amp;','&'),pageUrl).toString());}catch{/* Ignore invalid images. */}
+  }
+  // Elementor often describes the menu only in the image filename/title.
+  for(const match of html.matchAll(/<a\b[^>]*href=["']([^"']*(?:menu|catalog)[^"']*\.(?:png|jpe?g|webp)(?:\?[^"']*)?)["'][^>]*>/gi)){
+    try{urls.push(new URL(match[1].replaceAll('&amp;','&'),pageUrl).toString());}catch{/* Ignore invalid images. */}
+  }
+  return [...new Set(urls)].slice(0,8);
+}
+
+function responseText(data){
+  if(typeof data.output_text==='string')return data.output_text;
+  for(const item of data.output||[])for(const content of item.content||[])if(typeof content.text==='string')return content.text;
+  return '';
+}
+
+async function productsFromMenuImages(pageUrl,imageUrls){
+  const key=String(process.env.OPENAI_API_KEY||'').trim();
+  if(!key||!imageUrls.length)return [];
+  const prompt=`Read these published restaurant menu pages and return JSON only: {"products":[{"name":"","description":"","price":0,"currency":"PKR","menu_image_index":0}]}. Extract only visible products. Do not invent text. menu_image_index is zero-based and identifies the supplied menu page containing that product. Preserve the printed currency; use PKR for Rs. Return at most 16 products, prioritizing products with clear names and prices.`;
+  const content=[{type:'input_text',text:prompt},...imageUrls.map(image_url=>({type:'input_image',image_url,detail:'high'}))];
+  const upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:AbortSignal.timeout(45000),headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.ASHES_MENU_VISION_MODEL||'gpt-5.5',input:[{role:'user',content}],max_output_tokens:4000})});
+  if(!upstream.ok)return [];
+  const data=await upstream.json();
+  const raw=responseText(data).replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
+  let parsed;try{parsed=JSON.parse(raw);}catch{return [];}
+  return (Array.isArray(parsed.products)?parsed.products:[]).map((item,index)=>{
+    const imageIndex=Math.max(0,Math.min(imageUrls.length-1,Number(item.menu_image_index)||0));
+    const name=String(item.name||'').trim().slice(0,180);
+    if(!name)return null;
+    return {name,description:String(item.description||'').trim().slice(0,320)||null,image_url:imageUrls[imageIndex],price:money(item.price),currency:/^[A-Z]{3}$/.test(item.currency||'')?item.currency:'PKR',source_url:pageUrl,external_product_id:`vision-${index}`,model_url:null,readiness:'menu-page-reference'};
+  }).filter(Boolean).slice(0,16);
 }
 
 function pdfLinks(pageUrl,html){
@@ -192,16 +246,25 @@ export default async function handler(request,response){
     }
     const limit=Math.max(1,Math.min(Number(request.body?.max_pages)||8,16));
     const pages=[start];
-    for(const link of productLinks(start.url,start.html).slice(0,limit)){
+    const discovered=[...catalogLinks(start.url,start.html),...productLinks(start.url,start.html)];
+    for(const link of [...new Set(discovered)].slice(0,limit)){
       try{pages.push(await getHtml(link));}catch{/* Continue when an individual product blocks crawling. */}
     }
     const dedup=new Map();
     for(const page of pages)for(const product of productsFromPage(page.url,page.html)){const key=String(product.external_product_id||product.source_url||product.name).toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
     if(!dedup.size){
-      for(const product of productsFromMenuHtml(start.url,start.html)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
+      for(const page of pages)for(const product of productsFromMenuHtml(page.url,page.html)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
     }
     if(!dedup.size){
-      for(const product of productsFromMenuCards(start.url,start.html)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
+      for(const page of pages)for(const product of productsFromMenuCards(page.url,page.html)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
+    }
+    if(!dedup.size){
+      for(const page of pages){
+        const images=menuImageLinks(page.url,page.html);
+        if(!images.length)continue;
+        for(const product of await productsFromMenuImages(page.url,images)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
+        if(dedup.size)break;
+      }
     }
     if(!dedup.size){
       const menus=pdfLinks(start.url,start.html);
@@ -220,7 +283,7 @@ export default async function handler(request,response){
         return reference?{...product,...reference,readiness:product.model_url?'real-3d':'reference-image'}:product;
       }));
     }
-    if(!products.length)return response.status(422).json({detail:`${new URL(start.url).hostname} responded, but no product data or readable menu was found. Please retry once or use a direct store, collection, or menu page.`});
+    if(!products.length)return response.status(422).json({detail:`${new URL(start.url).hostname} responded, but its catalog could not be read automatically. It may require a location, login, CAPTCHA, or block automated access.`,code:'CATALOG_UNREADABLE',discovered_pages:pages.slice(1).map(page=>page.url)});
     const host=sourceHost;
     return response.status(200).json({mode:'live',website_url:start.url,merchant:host,found:products.length,products,notice:'Read-only preview. Nothing was saved or published.'});
   }catch(error){return response.status(400).json({detail:error.message||'The website could not be scanned.'});}

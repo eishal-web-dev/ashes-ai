@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { productsFromMenuCards } from '../api/prototype/menu-cards.js';
+import { catalogLinks,menuImageLinks } from '../api/prototype/scan.js';
 
 test('extracts Bubble Brews-style server-rendered menu cards',()=>{
   const html=`
@@ -33,6 +34,16 @@ test('extracts Bubble Brews-style server-rendered menu cards',()=>{
   });
   assert.equal(products[1].name,'Stick Waffle');
   assert.equal(products[1].price,380);
+});
+
+test('discovers menu and related order pages from a homepage',()=>{
+  const html='<a href="/menu/">Menu</a><a href="https://order.example.com/">Order online</a><a href="/about">About</a>';
+  assert.deepEqual(catalogLinks('https://example.com/',html),['https://example.com/menu/','https://order.example.com/']);
+});
+
+test('finds Elementor image-only menu pages',()=>{
+  const html='<a class="e-gallery-item elementor-gallery-item" href="/uploads/Website-Menu_pages-0001.jpg" data-elementor-lightbox-title="Website Menu page 1"></a>';
+  assert.deepEqual(menuImageLinks('https://restaurant.example/menu/',html),['https://restaurant.example/uploads/Website-Menu_pages-0001.jpg']);
 });
 
 test('ignores generic cards without a recognisable menu price',()=>{
