@@ -141,7 +141,7 @@ function responseText(data){
 async function requestGeminiVision(prompt,imageUrls){
   const key=String(process.env.GEMINI_API_KEY||'').trim();
   if(!key)return {error:'GEMINI_API_KEY_MISSING'};
-  const parts=[{text:prompt}];let totalBytes=0;
+  const input=[];let totalBytes=0;
   for(const rawUrl of imageUrls){
     try{
       const url=await safeUrl(rawUrl);
@@ -151,12 +151,13 @@ async function requestGeminiVision(prompt,imageUrls){
       if(!/^image\/(?:png|jpe?g|webp)$/i.test(mimeType))continue;
       const bytes=Buffer.from(await image.arrayBuffer());
       if(!bytes.length||bytes.length>6_000_000||totalBytes+bytes.length>18_000_000)continue;
-      totalBytes+=bytes.length;parts.push({inline_data:{mime_type:mimeType,data:bytes.toString('base64')}});
+      totalBytes+=bytes.length;input.push({type:'image',mime_type:mimeType,data:bytes.toString('base64')});
     }catch{/* Continue with other discovered menu images. */}
   }
-  if(parts.length===1)return {error:'GEMINI_MENU_IMAGES_UNREADABLE'};
-  const model=process.env.ASHES_GEMINI_VISION_MODEL||'gemini-2.5-flash';
-  const upstream=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{method:'POST',signal:AbortSignal.timeout(60000),headers:{'x-goog-api-key':key,'Content-Type':'application/json'},body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0,maxOutputTokens:4000,responseMimeType:'application/json'}})});
+  if(!input.length)return {error:'GEMINI_MENU_IMAGES_UNREADABLE'};
+  input.push({type:'text',text:prompt});
+  const model=process.env.ASHES_GEMINI_VISION_MODEL||'gemini-3-flash-preview';
+  const upstream=await fetch('https://generativelanguage.googleapis.com/v1beta/interactions',{method:'POST',signal:AbortSignal.timeout(60000),headers:{'x-goog-api-key':key,'Content-Type':'application/json'},body:JSON.stringify({model,input,store:false,generation_config:{thinking_level:'minimal',max_output_tokens:4000}})});
   const data=await upstream.json().catch(()=>({}));
   if(upstream.ok)return {data};
   const failure=upstreamError('GEMINI',upstream.status,data);return {error:failure.code,providerMessage:failure.message};
