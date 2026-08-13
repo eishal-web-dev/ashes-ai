@@ -133,14 +133,39 @@ export function menuImageLinks(pageUrl,html){
 function responseText(data){
   if(typeof data.output_text==='string')return data.output_text;
   if(typeof data.choices?.[0]?.message?.content==='string')return data.choices[0].message.content;
+  if(typeof data.candidates?.[0]?.content?.parts?.[0]?.text==='string')return data.candidates[0].content.parts.map(part=>part.text||'').join('');
   for(const item of data.output||[])for(const content of item.content||[])if(typeof content.text==='string')return content.text;
   return '';
+}
+
+async function requestGeminiVision(prompt,imageUrls){
+  const key=String(process.env.GEMINI_API_KEY||'').trim();
+  if(!key)return {error:'GEMINI_API_KEY_MISSING'};
+  const parts=[{text:prompt}];let totalBytes=0;
+  for(const rawUrl of imageUrls){
+    try{
+      const url=await safeUrl(rawUrl);
+      const image=await fetch(url,{signal:AbortSignal.timeout(12000),headers:{'user-agent':USER_AGENT,accept:'image/*'}});
+      if(!image.ok)continue;
+      const mimeType=(image.headers.get('content-type')||'image/jpeg').split(';')[0];
+      if(!/^image\/(?:png|jpe?g|webp)$/i.test(mimeType))continue;
+      const bytes=Buffer.from(await image.arrayBuffer());
+      if(!bytes.length||bytes.length>6_000_000||totalBytes+bytes.length>18_000_000)continue;
+      totalBytes+=bytes.length;parts.push({inline_data:{mime_type:mimeType,data:bytes.toString('base64')}});
+    }catch{/* Continue with other discovered menu images. */}
+  }
+  if(parts.length===1)return {error:'GEMINI_MENU_IMAGES_UNREADABLE'};
+  const model=process.env.ASHES_GEMINI_VISION_MODEL||'gemini-2.5-flash';
+  const upstream=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{method:'POST',signal:AbortSignal.timeout(60000),headers:{'x-goog-api-key':key,'Content-Type':'application/json'},body:JSON.stringify({contents:[{role:'user',parts}],generationConfig:{temperature:0,maxOutputTokens:4000,responseMimeType:'application/json'}})});
+  const data=await upstream.json().catch(()=>({}));
+  if(upstream.ok)return {data};
+  const failure=upstreamError('GEMINI',upstream.status,data);return {error:failure.code,providerMessage:failure.message};
 }
 
 function upstreamError(provider,status,data){
   const reason=String(data?.error?.code||data?.error?.type||'').replace(/[^a-z0-9_-]/gi,'_').toUpperCase();
   const rawMessage=typeof data?.error==='string'?data.error:(data?.error?.message||data?.message||data?.detail||'');
-  const message=String(rawMessage).replace(/(?:xai-|sk-)[a-z0-9_-]+/gi,'[redacted]').replace(/\s+/g,' ').trim().slice(0,300);
+  const message=String(rawMessage).replace(/(?:xai-|sk-)[a-z0-9_-]+|AIza[a-z0-9_-]+/gi,'[redacted]').replace(/\s+/g,' ').trim().slice(0,300);
   return {code:`${provider}_API_${status}${reason?`_${reason}`:''}`,message:message||null};
 }
 
@@ -167,9 +192,11 @@ async function requestOpenAIVision(prompt,imageUrls){
 async function productsFromMenuImages(pageUrl,imageUrls){
   if(!imageUrls.length)return {products:[],error:null};
   const prompt=`Read these published restaurant menu pages and return JSON only: {"products":[{"name":"","description":"","price":0,"currency":"PKR","menu_image_index":0}]}. Extract only visible products. Do not invent text. menu_image_index is zero-based and identifies the supplied menu page containing that product. Preserve the printed currency; use PKR for Rs. Return at most 16 products, prioritizing products with clear names and prices.`;
-  let result=await requestGrokVision(prompt,imageUrls);
-  const grokUnavailable=result.error==='XAI_API_KEY_MISSING'||/^XAI_API_5\d\d/.test(result.error||'');
-  if(grokUnavailable&&String(process.env.OPENAI_API_KEY||'').trim())result=await requestOpenAIVision(prompt,imageUrls);
+  let result=await requestGeminiVision(prompt,imageUrls);
+  const geminiUnavailable=result.error==='GEMINI_API_KEY_MISSING'||/^GEMINI_API_(?:429|5\d\d)/.test(result.error||'');
+  if(geminiUnavailable&&String(process.env.XAI_API_KEY||'').trim())result=await requestGrokVision(prompt,imageUrls);
+  const paidProvidersUnavailable=result.error==='XAI_API_KEY_MISSING'||/^XAI_API_5\d\d/.test(result.error||'');
+  if(paidProvidersUnavailable&&String(process.env.OPENAI_API_KEY||'').trim())result=await requestOpenAIVision(prompt,imageUrls);
   if(result.error)return {products:[],error:result.error,providerMessage:result.providerMessage||null};
   const data=result.data;
   const raw=responseText(data).replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
