@@ -29,16 +29,16 @@ export default function PrototypeProductTwin({product,onClose}){
    const started=await fetch('/api/prototype/generate-3d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_url:product.image_url,product_name:product.name})});
    const startBody=await started.json().catch(()=>({}));
    if(!started.ok)throw new Error(startBody.detail||'Could not start real 3D generation.');
-   for(let attempt=0;attempt<72;attempt+=1){
+   for(let attempt=0;attempt<240;attempt+=1){
     await new Promise(resolve=>setTimeout(resolve,5000));
     const check=await fetch(`/api/prototype/generate-3d?id=${encodeURIComponent(startBody.task_id)}`,{cache:'no-store'});
     const task=await check.json().catch(()=>({}));
     if(!check.ok)throw new Error(task.detail||'Could not check the 3D generation.');
     setGenerationProgress(Math.max(1,Math.min(99,Number(task.progress||attempt+2))));setGenerationStage(task.stage||'RECONSTRUCTING_3D');if(Array.isArray(task.views))setGeneratedViews(task.views.slice(0,4));
-    if(task.status==='SUCCEEDED'&&task.model_url){setGeneratedModel(task.model_url);setGenerationProgress(100);setGenerationState('done');return;}
+    if(['SUCCEEDED','COMPLETED'].includes(task.status)&&task.model_url){setGeneratedModel(task.model_url);setGenerationProgress(100);setGenerationState('done');return;}
     if(['FAILED','CANCELED','EXPIRED'].includes(task.status))throw new Error(task.error||`3D generation ${task.status.toLowerCase()}.`);
    }
-   throw new Error('3D generation is taking longer than expected. Please retry.');
+   throw new Error('3D generation is still running after 20 minutes. Check the Colab worker before retrying.');
   }catch(error){setGenerationState('error');setGenerationError(error.message||'3D generation failed.');}
  };
  const makeQr=async()=>{if(qrUrl)return;setQrBusy(true);setQrError('');try{const svg=await QRCode.toString(shareUrl,{type:'svg',errorCorrectionLevel:'M',margin:2,width:320,color:{dark:'#09090b',light:'#ffffff'}});setQrUrl(URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'})))}catch(e){setQrError(e.message||'QR generation failed.')}finally{setQrBusy(false)}};
@@ -58,7 +58,7 @@ export default function PrototypeProductTwin({product,onClose}){
      {product.image_url&&<div className="twin-source"><img src={product.image_url} alt="Product reference"/><span><b>{product.image_source_url?'Reference image':'Source product'}</b>{product.image_source_url?'Third-party reference — not the restaurant’s actual dish':'Displayed directly; no fake reconstruction'}</span></div>}
      {!assetModel&&product.image_url&&<div className="twin-real3d">
       <button className="twin-generate" onClick={generate3d} disabled={generationState==='working'}>{generationState==='working'?<LoaderCircle className="spin-icon"/>:<Sparkles/>}{generationState==='working'?(`Generating real 3D… ${generationProgress}%`):generationState==='error'?'Retry real 3D generation':'Generate real 3D from this image'}</button>
-      <small>Ashes generates front, right, back and left views, then TRELLIS reconstructs and textures a genuine GLB mesh.</small>
+      <small>Ashes TRELLIS reconstructs and textures a genuine GLB mesh. Multiple real views are used when the source provides them.</small>
       {generatedViews.length>0&&<div className="twin-generated-views">{generatedViews.map((view,index)=><img key={view||index} src={view} alt={`Generated product view ${index+1}`}/>)}</div>}
      </div>}
      {generationError&&<small className="prototype-error">{generationError}</small>}
