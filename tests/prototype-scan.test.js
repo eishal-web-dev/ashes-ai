@@ -39,3 +39,16 @@ test('ignores generic cards without a recognisable menu price',()=>{
   const html='<div class="product-card"><h3>Read our story</h3><p>No menu price here.</p></div>';
   assert.deepEqual(productsFromMenuCards('https://example.com',html),[]);
 });
+
+test('supports common restaurant card names and international currencies',()=>{
+  const html=`
+    <article class="menu-card"><img src="/pizza.jpg"><h2>Truffle Pizza</h2><p>Wild mushrooms and truffle.</p><span>£14.50</span></article>
+    <li class="food-item"><h3>Kunafa</h3><span>35 AED</span></li>
+    <div class="product-item"><h3>Iced Latte</h3><strong>$5.25</strong></div>`;
+  const products=productsFromMenuCards('https://restaurant.example/menu',html);
+  assert.deepEqual(products.map(({name,price,currency})=>({name,price,currency})),[
+    {name:'Truffle Pizza',price:14.5,currency:'GBP'},
+    {name:'Kunafa',price:35,currency:'AED'},
+    {name:'Iced Latte',price:5.25,currency:'USD'}
+  ]);
+});
