@@ -139,7 +139,9 @@ function responseText(data){
 
 function upstreamError(provider,status,data){
   const reason=String(data?.error?.code||data?.error?.type||'').replace(/[^a-z0-9_-]/gi,'_').toUpperCase();
-  return `${provider}_API_${status}${reason?`_${reason}`:''}`;
+  const rawMessage=typeof data?.error==='string'?data.error:(data?.error?.message||data?.message||data?.detail||'');
+  const message=String(rawMessage).replace(/(?:xai-|sk-)[a-z0-9_-]+/gi,'[redacted]').replace(/\s+/g,' ').trim().slice(0,300);
+  return {code:`${provider}_API_${status}${reason?`_${reason}`:''}`,message:message||null};
 }
 
 async function requestGrokVision(prompt,imageUrls){
@@ -148,7 +150,8 @@ async function requestGrokVision(prompt,imageUrls){
   const content=[{type:'text',text:prompt},...imageUrls.map(url=>({type:'image_url',image_url:{url,detail:'high'}}))];
   const upstream=await fetch('https://api.x.ai/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(60000),headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.ASHES_XAI_VISION_MODEL||'grok-4.6',messages:[{role:'user',content}],temperature:0,max_tokens:4000})});
   const data=await upstream.json().catch(()=>({}));
-  return upstream.ok?{data}:{error:upstreamError('XAI',upstream.status,data)};
+  if(upstream.ok)return {data};
+  const failure=upstreamError('XAI',upstream.status,data);return {error:failure.code,providerMessage:failure.message};
 }
 
 async function requestOpenAIVision(prompt,imageUrls){
@@ -157,7 +160,8 @@ async function requestOpenAIVision(prompt,imageUrls){
   const content=[{type:'input_text',text:prompt},...imageUrls.map(image_url=>({type:'input_image',image_url,detail:'high'}))];
   const upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:AbortSignal.timeout(60000),headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.ASHES_MENU_VISION_MODEL||'gpt-4.1-mini',input:[{role:'user',content}],max_output_tokens:4000})});
   const data=await upstream.json().catch(()=>({}));
-  return upstream.ok?{data}:{error:upstreamError('OPENAI',upstream.status,data)};
+  if(upstream.ok)return {data};
+  const failure=upstreamError('OPENAI',upstream.status,data);return {error:failure.code,providerMessage:failure.message};
 }
 
 async function productsFromMenuImages(pageUrl,imageUrls){
@@ -166,7 +170,7 @@ async function productsFromMenuImages(pageUrl,imageUrls){
   let result=await requestGrokVision(prompt,imageUrls);
   const grokUnavailable=result.error==='XAI_API_KEY_MISSING'||/^XAI_API_5\d\d/.test(result.error||'');
   if(grokUnavailable&&String(process.env.OPENAI_API_KEY||'').trim())result=await requestOpenAIVision(prompt,imageUrls);
-  if(result.error)return {products:[],error:result.error};
+  if(result.error)return {products:[],error:result.error,providerMessage:result.providerMessage||null};
   const data=result.data;
   const raw=responseText(data).replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
   let parsed;try{parsed=JSON.parse(raw);}catch{return {products:[],error:'VISION_RESPONSE_INVALID'};}
@@ -283,12 +287,12 @@ export default async function handler(request,response){
     if(!dedup.size){
       for(const page of pages)for(const product of productsFromMenuCards(page.url,page.html)){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
     }
-    let visionError=null;
+    let visionError=null;let visionProviderMessage=null;
     if(!dedup.size){
       for(const page of pages){
         const images=menuImageLinks(page.url,page.html);
         if(!images.length)continue;
-        const vision=await productsFromMenuImages(page.url,images);visionError=vision.error;
+        const vision=await productsFromMenuImages(page.url,images);visionError=vision.error;visionProviderMessage=vision.providerMessage||null;
         for(const product of vision.products){const key=product.name.toLowerCase();if(!dedup.has(key))dedup.set(key,product);}
         if(dedup.size)break;
       }
@@ -310,7 +314,7 @@ export default async function handler(request,response){
         return reference?{...product,...reference,readiness:product.model_url?'real-3d':'reference-image'}:product;
       }));
     }
-    if(!products.length)return response.status(422).json({detail:visionError?`The menu pages were found, but vision extraction failed (${visionError}). Check the matching provider key, API credits, and model access in Vercel.`:`${new URL(start.url).hostname} responded, but its catalog could not be read automatically. It may require a location, login, CAPTCHA, or block automated access.`,code:visionError||'CATALOG_UNREADABLE',discovered_pages:pages.slice(1).map(page=>page.url)});
+    if(!products.length)return response.status(422).json({detail:visionError?`The menu pages were found, but vision extraction failed (${visionError}).${visionProviderMessage?` Provider response: ${visionProviderMessage}`:' Check the matching provider key, API credits, and model access in Vercel.'}`:`${new URL(start.url).hostname} responded, but its catalog could not be read automatically. It may require a location, login, CAPTCHA, or block automated access.`,code:visionError||'CATALOG_UNREADABLE',provider_message:visionProviderMessage,discovered_pages:pages.slice(1).map(page=>page.url)});
     const host=sourceHost;
     return response.status(200).json({mode:'live',website_url:start.url,merchant:host,found:products.length,products,notice:'Read-only preview. Nothing was saved or published.'});
   }catch(error){return response.status(400).json({detail:error.message||'The website could not be scanned.'});}
