@@ -3,7 +3,7 @@ os.environ['SPCONV_ALGO'] = 'native'
 os.environ['ATTN_BACKEND'] = 'xformers'
 os.environ['SPARSE_ATTN'] = 'xformers'
 
-import subprocess, sys, tempfile, ctypes
+import subprocess, sys, tempfile, ctypes, json
 
 try:
     import gradio_litmodel3d  # noqa: F401
@@ -122,11 +122,11 @@ os.makedirs(TMP_DIR, exist_ok=True)
 def start_session(req: gr.Request):
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     os.makedirs(user_dir, exist_ok=True)
-    
-    
+
+
 def end_session(req: gr.Request):
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
-    shutil.rmtree(user_dir)
+    shutil.rmtree(user_dir, ignore_errors=True)
 
 
 def preprocess_image(image: Image.Image) -> Image.Image:
@@ -180,9 +180,8 @@ def pack_state(gs: Gaussian, mesh: MeshExtractResult) -> dict:
             'faces': mesh.faces.cpu().numpy(),
         },
     }
-    
-    
-def unpack_state(state: dict) -> Tuple[Gaussian, edict, str]:
+
+def unpack_state(state: dict) -> Tuple[Gaussian, edict]:
     gs = Gaussian(
         aabb=state['gaussian']['aabb'],
         sh_degree=state['gaussian']['sh_degree'],
@@ -260,7 +259,15 @@ def generate_and_extract_glb(
         str: The path to the extracted GLB file (for download).
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
-    
+    os.makedirs(user_dir, exist_ok=True)
+
+    if image is None and not is_multiimage:
+        raise gr.Error("Upload a product image before generating.")
+    if is_multiimage and len(multiimages or []) < 4:
+        raise gr.Error(
+            "Ashes Accurate requires at least four real views: front, back, left, and right."
+        )
+
     # Generate 3D model
     if not is_multiimage:
         outputs = pipeline.run(
@@ -295,8 +302,10 @@ def generate_and_extract_glb(
         )
     
     # Render video
-    video = render_utils.render_video(outputs['gaussian'][0], num_frames=120)['color']
-    video_geo = render_utils.render_video(outputs['mesh'][0], num_frames=120)['normal']
+    # Sixty frames are enough for inspection and avoid wasting GPU quota.
+    # This changes preview length only; model and texture quality remain unchanged.
+    video = render_utils.render_video(outputs['gaussian'][0], num_frames=60)['color']
+    video_geo = render_utils.render_video(outputs['mesh'][0], num_frames=60)['normal']
     video = [np.concatenate([video[i], video_geo[i]], axis=1) for i in range(len(video))]
     video_path = os.path.join(user_dir, 'ashes-preview.mp4')
     imageio.mimsave(video_path, video, fps=15)
@@ -307,7 +316,25 @@ def generate_and_extract_glb(
     glb = postprocessing_utils.to_glb(gs, mesh, simplify=mesh_simplify, texture_size=texture_size, verbose=False)
     glb_path = os.path.join(user_dir, 'ashes-model.glb')
     glb.export(glb_path)
-    
+
+    # Store the exact recipe so Colab and cloud results can be reproduced.
+    config_path = os.path.join(user_dir, 'ashes-generation-config.json')
+    with open(config_path, 'w', encoding='utf-8') as config_file:
+        json.dump({
+            "engine": "ashes-accurate-v0.1",
+            "seed": int(seed),
+            "input_mode": "multi_view" if is_multiimage else "single_image",
+            "real_view_count": len(multiimages or []) if is_multiimage else 1,
+            "ss_guidance_strength": float(ss_guidance_strength),
+            "ss_sampling_steps": int(ss_sampling_steps),
+            "slat_guidance_strength": float(slat_guidance_strength),
+            "slat_sampling_steps": int(slat_sampling_steps),
+            "multiimage_algo": multiimage_algo,
+            "mesh_simplify": float(mesh_simplify),
+            "texture_size": int(texture_size),
+            "preview_frames": 60,
+        }, config_file, indent=2)
+
     # Pack state for optional Gaussian extraction
     state = pack_state(gs, mesh)
     
@@ -398,12 +425,16 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
                     gr.Markdown("""
                         Input different views of the object in separate images. 
                         
-                        *NOTE: this is an experimental algorithm without training a specialized model. It may not produce the best results for all images, especially those having different poses or inconsistent details.*
+                        **Ashes Accurate:** upload at least four real photographs of the same unchanged product: front, back, left, and right. Six to eight evenly spaced views are preferred. Generated side images are not treated as accurate evidence.
                     """)
             
             with gr.Accordion(label="Generation Settings", open=False):
                 seed = gr.Slider(0, MAX_SEED, label="Seed", value=0, step=1)
-                randomize_seed = gr.Checkbox(label="Randomize Seed", value=True)
+                randomize_seed = gr.Checkbox(
+                    label="Randomize Seed",
+                    value=False,
+                    info="Keep disabled during quality comparisons so every run is reproducible.",
+                )
                 gr.Markdown("Stage 1: Sparse Structure Generation")
                 with gr.Row():
                     ss_guidance_strength = gr.Slider(0.0, 10.0, label="Guidance Strength", value=7.5, step=0.1)
@@ -415,8 +446,20 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
                 multiimage_algo = gr.Radio(["stochastic", "multidiffusion"], label="Multi-image Algorithm", value="stochastic")
             
             with gr.Accordion(label="GLB Extraction Settings", open=False):
-                mesh_simplify = gr.Slider(0.9, 0.98, label="Simplify", value=0.95, step=0.01)
-                texture_size = gr.Slider(512, 2048, label="Texture Size", value=1024, step=512)
+                mesh_simplify = gr.Slider(
+                    0.0, 0.98,
+                    label="Simplify",
+                    value=0.50,
+                    step=0.05,
+                    info="Lower values preserve more geometry. Use 0–0.25 for master assets; optimize a copy later.",
+                )
+                texture_size = gr.Slider(
+                    512, 4096,
+                    label="Texture Size",
+                    value=2048,
+                    step=512,
+                    info="Use 4096 for detail testing and 2048 for normal storefront delivery.",
+                )
 
             generate_btn = gr.Button("Generate & Extract GLB", variant="primary")
             extract_gs_btn = gr.Button("Extract Gaussian", interactive=False)
