@@ -212,3 +212,27 @@ Supersedes:
 **Reason:** This proves the core economics and architecture before Shopify integration is expanded.
 
 **Consequences:** Do not prioritize Amazon, try-on, complex analytics or unrelated UI polish before this gate passes reliably.
+
+---
+
+## 2026-08-14 — Preserve the working prototype unless explicitly asked to change it
+
+**Status:** Active
+
+**Decision:** The existing Ashes prototype view, prototype UI, prototype routes, demo behavior and prototype runtime code must not be redesigned, rewritten or removed merely to make it visually or structurally match the new commerce strategy.
+
+**Reason:** The prototype is already a working demonstration and historical product asset. The strategy can evolve without destroying useful existing work.
+
+**Consequences:** Current documentation may describe the new Shopify/Product Twin direction, while new implementation work should be added around or beside the prototype. Any future change to the prototype requires an explicit founder request. Documentation-only alignment must not be used as justification to alter prototype code.
+
+---
+
+## 2026-08-14 — Maintain a Done / Doing / Next operational status document
+
+**Status:** Active
+
+**Decision:** `docs/CURRENT-STATUS.md` is the fast operational summary for the project and separates implemented work from current validation and future plans.
+
+**Reason:** The Ashes vision is evolving quickly. Future chats and contributors need a simple way to avoid confusing planned features with already-working features.
+
+**Consequences:** Update `CURRENT-STATUS.md` whenever a major milestone moves from NEXT to DOING or from DOING to DONE.
