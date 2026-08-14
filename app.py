@@ -1,307 +1,122 @@
-﻿import gradio as gr
-from gradio_client import Client, handle_file
+﻿import os
+os.environ['SPCONV_ALGO'] = 'native'
+os.environ['ATTN_BACKEND'] = 'xformers'
+os.environ['SPARSE_ATTN'] = 'xformers'
+
+import subprocess, sys, tempfile, ctypes
+
+try:
+    import gradio_litmodel3d  # noqa: F401
+except ImportError:
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "--no-deps",
+         "gradio_litmodel3d==0.0.1"],
+    )
+
 import spaces
 
-import os
-os.environ["OPENCV_IO_ENABLE_OPENEXR"] = '1'
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-os.environ["ATTN_BACKEND"] = "flash_attn"
-os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'autotune_cache.json')
-os.environ["FLEX_GEMM_AUTOTUNER_VERBOSE"] = '1'
-from datetime import datetime
+CUDA_HOME = "/cuda-image/usr/local/cuda-13.0"
+CUDA_LIBDIR = os.path.join(CUDA_HOME, "lib64")
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+@spaces.GPU(duration=600)
+def first_gpu_setup():
+    need_nvdiffrast = need_dgr = False
+    try:
+        import nvdiffrast  # noqa: F401
+    except ImportError:
+        need_nvdiffrast = True
+    try:
+        import diff_gaussian_rasterization  # noqa: F401
+    except ImportError:
+        need_dgr = True
+    if not (need_nvdiffrast or need_dgr):
+        print("CUDA extensions already installed; skipping build.")
+        return
+
+    if not os.path.exists(os.path.join(CUDA_HOME, "bin", "nvcc")):
+        raise RuntimeError(
+            f"nvcc not found at {CUDA_HOME}/bin/nvcc on the ZeroGPU worker. "
+            "The new-hardware CUDA path may have moved; please update CUDA_HOME."
+        )
+
+    patch_dir = tempfile.mkdtemp(prefix="torch_cuda_patch_")
+    with open(os.path.join(patch_dir, "sitecustomize.py"), "w") as f:
+        f.write(
+            "try:\n"
+            "    import torch.utils.cpp_extension as _c\n"
+            "    _c._check_cuda_version = lambda *a, **k: None\n"
+            "except Exception:\n"
+            "    pass\n"
+        )
+
+    env = os.environ.copy()
+    env["CUDA_HOME"] = CUDA_HOME
+    env["CUDA_PATH"] = CUDA_HOME
+    env["PATH"] = os.path.join(CUDA_HOME, "bin") + os.pathsep + env.get("PATH", "")
+    env["PYTHONPATH"] = patch_dir + os.pathsep + env.get("PYTHONPATH", "")
+    env["TORCH_CUDA_ARCH_LIST"] = "12.0"
+
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "--no-deps",
+         "setuptools", "wheel", "ninja"],
+    )
+
+    if need_nvdiffrast:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--no-build-isolation",
+             os.path.join(REPO_DIR, "extensions", "nvdiffrast")],
+            env=env,
+        )
+
+    if need_dgr:
+        mip_dir = tempfile.mkdtemp(prefix="mip_splatting_")
+        subprocess.check_call(
+            ["git", "clone", "--recursive", "--depth=1",
+             "https://github.com/autonomousvision/mip-splatting.git", mip_dir],
+        )
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--no-build-isolation",
+             os.path.join(mip_dir, "submodules", "diff-gaussian-rasterization")],
+            env=env,
+        )
+
+
+first_gpu_setup()
+
+ctypes.CDLL(os.path.join(CUDA_LIBDIR, "libcudart.so.13"), mode=ctypes.RTLD_GLOBAL)
+os.environ["LD_LIBRARY_PATH"] = CUDA_LIBDIR + os.pathsep + os.environ.get("LD_LIBRARY_PATH", "")
+
+import gradio as gr
+from gradio_litmodel3d import LitModel3D
+
 import shutil
-import cv2
 from typing import *
 import torch
 import numpy as np
+import imageio
+from easydict import EasyDict as edict
 from PIL import Image
-import base64
-import io
-import tempfile
-from trellis2.modules.sparse import SparseTensor
-from trellis2.pipelines import Trellis2ImageTo3DPipeline
-from trellis2.renderers import EnvMap
-from trellis2.utils import render_utils
-import o_voxel
+
+# xformers on Blackwell (sm_120) picks Flash-Attn-3 (Hopper-only) and crashes
+# with "invalid argument". Force it to use Cutlass kernels instead.
+import xformers.ops as _xops
+_orig_mea = _xops.memory_efficient_attention
+_cutlass_op = (_xops.fmha.cutlass.FwOp, _xops.fmha.cutlass.BwOp)
+def _mea_cutlass(*args, **kwargs):
+    kwargs.setdefault("op", _cutlass_op)
+    return _orig_mea(*args, **kwargs)
+_xops.memory_efficient_attention = _mea_cutlass
+
+from trellis.pipelines import TrellisImageTo3DPipeline
+from trellis.representations import Gaussian, MeshExtractResult
+from trellis.utils import render_utils, postprocessing_utils
 
 
 MAX_SEED = np.iinfo(np.int32).max
 TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tmp')
-MODES = [
-    {"name": "Normal", "icon": "assets/app/normal.png", "render_key": "normal"},
-    {"name": "Clay render", "icon": "assets/app/clay.png", "render_key": "clay"},
-    {"name": "Base color", "icon": "assets/app/basecolor.png", "render_key": "base_color"},
-    {"name": "HDRI forest", "icon": "assets/app/hdri_forest.png", "render_key": "shaded_forest"},
-    {"name": "HDRI sunset", "icon": "assets/app/hdri_sunset.png", "render_key": "shaded_sunset"},
-    {"name": "HDRI courtyard", "icon": "assets/app/hdri_courtyard.png", "render_key": "shaded_courtyard"},
-]
-STEPS = 8
-DEFAULT_MODE = 3
-DEFAULT_STEP = 3
-
-
-css = """
-/* Overwrite Gradio Default Style */
-.stepper-wrapper {
-    padding: 0;
-}
-
-.stepper-container {
-    padding: 0;
-    align-items: center;
-}
-
-.step-button {
-    flex-direction: row;
-}
-
-.step-connector {
-    transform: none;
-}
-
-.step-number {
-    width: 16px;
-    height: 16px;
-}
-
-.step-label {
-    position: relative;
-    bottom: 0;
-}
-
-.wrap.center.full {
-    inset: 0;
-    height: 100%;
-}
-
-.wrap.center.full.translucent {
-    background: var(--block-background-fill);
-}
-
-.meta-text-center {
-    display: block !important;
-    position: absolute !important;
-    top: unset !important;
-    bottom: 0 !important;
-    right: 0 !important;
-    transform: unset !important;
-}
-
-/* Previewer */
-.previewer-container {
-    position: relative;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    width: 100%;
-    height: 722px;
-    margin: 0 auto;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-}
-
-.previewer-container .tips-icon {
-    position: absolute;
-    right: 10px;
-    top: 10px;
-    z-index: 10;
-    border-radius: 10px;
-    color: #fff;
-    background-color: var(--color-accent);
-    padding: 3px 6px;
-    user-select: none;
-}
-
-.previewer-container .tips-text {
-    position: absolute;
-    right: 10px;
-    top: 50px;
-    color: #fff;
-    background-color: var(--color-accent);
-    border-radius: 10px;
-    padding: 6px;
-    text-align: left;
-    max-width: 300px;
-    z-index: 10;
-    transition: all 0.3s;
-    opacity: 0%;
-    user-select: none;
-}
-
-.previewer-container .tips-text p {
-    font-size: 14px;
-    line-height: 1.2;
-}
-
-.tips-icon:hover + .tips-text { 
-    display: block;
-    opacity: 100%;
-}
-
-/* Row 1: Display Modes */
-.previewer-container .mode-row {
-    width: 100%;
-    display: flex;
-    gap: 8px;
-    justify-content: center;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-}
-.previewer-container .mode-btn {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    cursor: pointer;
-    opacity: 0.5;
-    transition: all 0.2s;
-    border: 2px solid #ddd;
-    object-fit: cover;
-}
-.previewer-container .mode-btn:hover { opacity: 0.9; transform: scale(1.1); }
-.previewer-container .mode-btn.active {
-    opacity: 1;
-    border-color: var(--color-accent);
-    transform: scale(1.1);
-}
-
-/* Row 2: Display Image */
-.previewer-container .display-row {
-    margin-bottom: 20px;
-    min-height: 400px;
-    width: 100%;
-    flex-grow: 1;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-.previewer-container .previewer-main-image {
-    max-width: 100%;
-    max-height: 100%;
-    flex-grow: 1;
-    object-fit: contain;
-    display: none;
-}
-.previewer-container .previewer-main-image.visible {
-    display: block;
-}
-
-/* Row 3: Custom HTML Slider */
-.previewer-container .slider-row {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    padding: 0 10px;
-}
-
-.previewer-container input[type=range] {
-    -webkit-appearance: none;
-    width: 100%;
-    max-width: 400px;
-    background: transparent;
-}
-.previewer-container input[type=range]::-webkit-slider-runnable-track {
-    width: 100%;
-    height: 8px;
-    cursor: pointer;
-    background: #ddd;
-    border-radius: 5px;
-}
-.previewer-container input[type=range]::-webkit-slider-thumb {
-    height: 20px;
-    width: 20px;
-    border-radius: 50%;
-    background: var(--color-accent);
-    cursor: pointer;
-    -webkit-appearance: none;
-    margin-top: -6px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    transition: transform 0.1s;
-}
-.previewer-container input[type=range]::-webkit-slider-thumb:hover {
-    transform: scale(1.2);
-}
-
-/* Overwrite Previewer Block Style */
-.gradio-container .padded:has(.previewer-container) {
-    padding: 0 !important;
-}
-
-.gradio-container:has(.previewer-container) [data-testid="block-label"] {
-    position: absolute;
-    top: 0;
-    left: 0;
-}
-"""
-
-
-head = """
-<script>
-    function refreshView(mode, step) {
-        // 1. Find current mode and step
-        const allImgs = document.querySelectorAll('.previewer-main-image');
-        for (let i = 0; i < allImgs.length; i++) {
-            const img = allImgs[i];
-            if (img.classList.contains('visible')) {
-                const id = img.id;
-                const [_, m, s] = id.split('-');
-                if (mode === -1) mode = parseInt(m.slice(1));
-                if (step === -1) step = parseInt(s.slice(1));
-                break;
-            }
-        }
-        
-        // 2. Hide ALL images
-        // We select all elements with class 'previewer-main-image'
-        allImgs.forEach(img => img.classList.remove('visible'));
-
-        // 3. Construct the specific ID for the current state
-        // Format: view-m{mode}-s{step}
-        const targetId = 'view-m' + mode + '-s' + step;
-        const targetImg = document.getElementById(targetId);
-
-        // 4. Show ONLY the target
-        if (targetImg) {
-            targetImg.classList.add('visible');
-        }
-
-        // 5. Update Button Highlights
-        const allBtns = document.querySelectorAll('.mode-btn');
-        allBtns.forEach((btn, idx) => {
-            if (idx === mode) btn.classList.add('active');
-            else btn.classList.remove('active');
-        });
-    }
-    
-    // --- Action: Switch Mode ---
-    function selectMode(mode) {
-        refreshView(mode, -1);
-    }
-    
-    // --- Action: Slider Change ---
-    function onSliderChange(val) {
-        refreshView(-1, parseInt(val));
-    }
-</script>
-"""
-
-
-empty_html = f"""
-<div class="previewer-container">
-    <svg style=" opacity: .5; height: var(--size-5); color: var(--body-text-color);"
-    xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="feather feather-image"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
-</div>
-"""
-
-
-def image_to_base64(image):
-    buffered = io.BytesIO()
-    image = image.convert("RGB")
-    image.save(buffered, format="jpeg", quality=85)
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    return f"data:image/jpeg;base64,{img_str}"
+os.makedirs(TMP_DIR, exist_ok=True)
 
 
 def start_session(req: gr.Request):
@@ -312,320 +127,359 @@ def start_session(req: gr.Request):
 def end_session(req: gr.Request):
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     shutil.rmtree(user_dir)
+
+
+def preprocess_image(image: Image.Image) -> Image.Image:
+    """
+    Preprocess the input image for 3D generation.
     
+    This function is called when a user uploads an image or selects an example.
+    It applies background removal and other preprocessing steps necessary for
+    optimal 3D model generation.
 
-def remove_background(input: Image.Image) -> Image.Image:
-    with tempfile.NamedTemporaryFile(suffix='.png') as f:
-        input = input.convert('RGB')
-        input.save(f.name)
-        output = rmbg_client.predict(handle_file(f.name), api_name="/image")[0][0]
-        output = Image.open(output)
-        return output
+    Args:
+        image (Image.Image): The input image from the user
 
-
-def preprocess_image(input: Image.Image) -> Image.Image:
+    Returns:
+        Image.Image: The preprocessed image ready for 3D generation
     """
-    Preprocess the input image.
+    processed_image = pipeline.preprocess_image(image)
+    return processed_image
+
+
+def preprocess_images(images: List[Tuple[Image.Image, str]]) -> List[Image.Image]:
     """
-    # if has alpha channel, use it directly; otherwise, remove background
-    has_alpha = False
-    if input.mode == 'RGBA':
-        alpha = np.array(input)[:, :, 3]
-        if not np.all(alpha == 255):
-            has_alpha = True
-    max_size = max(input.size)
-    scale = min(1, 1024 / max_size)
-    if scale < 1:
-        input = input.resize((int(input.width * scale), int(input.height * scale)), Image.Resampling.LANCZOS)
-    if has_alpha:
-        output = input
-    else:
-        output = remove_background(input)
-    output_np = np.array(output)
-    alpha = output_np[:, :, 3]
-    bbox = np.argwhere(alpha > 0.8 * 255)
-    bbox = np.min(bbox[:, 1]), np.min(bbox[:, 0]), np.max(bbox[:, 1]), np.max(bbox[:, 0])
-    center = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
-    size = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
-    size = int(size * 1)
-    bbox = center[0] - size // 2, center[1] - size // 2, center[0] + size // 2, center[1] + size // 2
-    output = output.crop(bbox)  # type: ignore
-    output = np.array(output).astype(np.float32) / 255
-    output = output[:, :, :3] * output[:, :, 3:4]
-    output = Image.fromarray((output * 255).astype(np.uint8))
-    return output
+    Preprocess a list of input images for multi-image 3D generation.
+    
+    This function is called when users upload multiple images in the gallery.
+    It processes each image to prepare them for the multi-image 3D generation pipeline.
+    
+    Args:
+        images (List[Tuple[Image.Image, str]]): The input images from the gallery
+        
+    Returns:
+        List[Image.Image]: The preprocessed images ready for 3D generation
+    """
+    images = [image[0] for image in images]
+    processed_images = [pipeline.preprocess_image(image) for image in images]
+    return processed_images
 
 
-def pack_state(latents: Tuple[SparseTensor, SparseTensor, int]) -> dict:
-    shape_slat, tex_slat, res = latents
+def pack_state(gs: Gaussian, mesh: MeshExtractResult) -> dict:
     return {
-        'shape_slat_feats': shape_slat.feats.cpu().numpy(),
-        'tex_slat_feats': tex_slat.feats.cpu().numpy(),
-        'coords': shape_slat.coords.cpu().numpy(),
-        'res': res,
+        'gaussian': {
+            **gs.init_params,
+            '_xyz': gs._xyz.cpu().numpy(),
+            '_features_dc': gs._features_dc.cpu().numpy(),
+            '_scaling': gs._scaling.cpu().numpy(),
+            '_rotation': gs._rotation.cpu().numpy(),
+            '_opacity': gs._opacity.cpu().numpy(),
+        },
+        'mesh': {
+            'vertices': mesh.vertices.cpu().numpy(),
+            'faces': mesh.faces.cpu().numpy(),
+        },
     }
     
     
-def unpack_state(state: dict) -> Tuple[SparseTensor, SparseTensor, int]:
-    shape_slat = SparseTensor(
-        feats=torch.from_numpy(state['shape_slat_feats']).cuda(),
-        coords=torch.from_numpy(state['coords']).cuda(),
+def unpack_state(state: dict) -> Tuple[Gaussian, edict, str]:
+    gs = Gaussian(
+        aabb=state['gaussian']['aabb'],
+        sh_degree=state['gaussian']['sh_degree'],
+        mininum_kernel_size=state['gaussian']['mininum_kernel_size'],
+        scaling_bias=state['gaussian']['scaling_bias'],
+        opacity_bias=state['gaussian']['opacity_bias'],
+        scaling_activation=state['gaussian']['scaling_activation'],
     )
-    tex_slat = shape_slat.replace(torch.from_numpy(state['tex_slat_feats']).cuda())
-    return shape_slat, tex_slat, state['res']
+    gs._xyz = torch.tensor(state['gaussian']['_xyz'], device='cuda')
+    gs._features_dc = torch.tensor(state['gaussian']['_features_dc'], device='cuda')
+    gs._scaling = torch.tensor(state['gaussian']['_scaling'], device='cuda')
+    gs._rotation = torch.tensor(state['gaussian']['_rotation'], device='cuda')
+    gs._opacity = torch.tensor(state['gaussian']['_opacity'], device='cuda')
+    
+    mesh = edict(
+        vertices=torch.tensor(state['mesh']['vertices'], device='cuda'),
+        faces=torch.tensor(state['mesh']['faces'], device='cuda'),
+    )
+    
+    return gs, mesh
 
 
 def get_seed(randomize_seed: bool, seed: int) -> int:
     """
-    Get the random seed.
+    Get the random seed for generation.
+    
+    This function is called by the generate button to determine whether to use
+    a random seed or the user-specified seed value.
+    
+    Args:
+        randomize_seed (bool): Whether to generate a random seed
+        seed (int): The user-specified seed value
+        
+    Returns:
+        int: The seed to use for generation
     """
     return np.random.randint(0, MAX_SEED) if randomize_seed else seed
 
 
 @spaces.GPU(duration=120)
-def image_to_3d(
+def generate_and_extract_glb(
     image: Image.Image,
+    multiimages: List[Tuple[Image.Image, str]],
+    is_multiimage: bool,
     seed: int,
-    resolution: str,
     ss_guidance_strength: float,
-    ss_guidance_rescale: float,
     ss_sampling_steps: int,
-    ss_rescale_t: float,
-    shape_slat_guidance_strength: float,
-    shape_slat_guidance_rescale: float,
-    shape_slat_sampling_steps: int,
-    shape_slat_rescale_t: float,
-    tex_slat_guidance_strength: float,
-    tex_slat_guidance_rescale: float,
-    tex_slat_sampling_steps: int,
-    tex_slat_rescale_t: float,
-    req: gr.Request,
-    progress=gr.Progress(track_tqdm=True),
-) -> str:
-    # --- Sampling ---
-    outputs, latents = pipeline.run(
-        image,
-        seed=seed,
-        preprocess_image=False,
-        sparse_structure_sampler_params={
-            "steps": ss_sampling_steps,
-            "guidance_strength": ss_guidance_strength,
-            "guidance_rescale": ss_guidance_rescale,
-            "rescale_t": ss_rescale_t,
-        },
-        shape_slat_sampler_params={
-            "steps": shape_slat_sampling_steps,
-            "guidance_strength": shape_slat_guidance_strength,
-            "guidance_rescale": shape_slat_guidance_rescale,
-            "rescale_t": shape_slat_rescale_t,
-        },
-        tex_slat_sampler_params={
-            "steps": tex_slat_sampling_steps,
-            "guidance_strength": tex_slat_guidance_strength,
-            "guidance_rescale": tex_slat_guidance_rescale,
-            "rescale_t": tex_slat_rescale_t,
-        },
-        pipeline_type={
-            "512": "512",
-            "1024": "1024_cascade",
-            "1536": "1536_cascade",
-        }[resolution],
-        return_latent=True,
-    )
-    mesh = outputs[0]
-    mesh.simplify(16777216) # nvdiffrast limit
-    images = render_utils.render_snapshot(mesh, resolution=1024, r=2, fov=36, nviews=STEPS, envmap=envmap)
-    state = pack_state(latents)
-    torch.cuda.empty_cache()
-    
-    # --- HTML Construction ---
-    # The Stack of 48 Images
-    images_html = ""
-    for m_idx, mode in enumerate(MODES):
-        for s_idx in range(STEPS):
-            # ID Naming Convention: view-m{mode}-s{step}
-            unique_id = f"view-m{m_idx}-s{s_idx}"
-            
-            # Logic: Only Mode 0, Step 0 is visible initially
-            is_visible = (m_idx == DEFAULT_MODE and s_idx == DEFAULT_STEP)
-            vis_class = "visible" if is_visible else ""
-            
-            # Image Source
-            img_base64 = image_to_base64(Image.fromarray(images[mode['render_key']][s_idx]))
-            
-            # Render the Tag
-            images_html += f"""
-                <img id="{unique_id}" 
-                     class="previewer-main-image {vis_class}" 
-                     src="{img_base64}" 
-                     loading="eager">
-            """
-    
-    # Button Row HTML
-    btns_html = ""
-    for idx, mode in enumerate(MODES):        
-        active_class = "active" if idx == DEFAULT_MODE else ""
-        # Note: onclick calls the JS function defined in Head
-        btns_html += f"""
-            <img src="{mode['icon_base64']}" 
-                 class="mode-btn {active_class}" 
-                 onclick="selectMode({idx})"
-                 title="{mode['name']}">
-        """
-    
-    # Assemble the full component
-    full_html = f"""
-    <div class="previewer-container">
-        <div class="tips-wrapper">
-            <div class="tips-icon">ðŸ’¡Tips</div>
-            <div class="tips-text">
-                <p>â— <b>Render Mode</b> - Click on the circular buttons to switch between different render modes.</p>
-                <p>â— <b>View Angle</b> - Drag the slider to change the view angle.</p>
-            </div>
-        </div>
-        
-        <!-- Row 1: Viewport containing 48 static <img> tags -->
-        <div class="display-row">
-            {images_html}
-        </div>
-        
-        <!-- Row 2 -->
-        <div class="mode-row" id="btn-group">
-            {btns_html}
-        </div>
-
-        <!-- Row 3: Slider -->
-        <div class="slider-row">
-            <input type="range" id="custom-slider" min="0" max="{STEPS - 1}" value="{DEFAULT_STEP}" step="1" oninput="onSliderChange(this.value)">
-        </div>
-    </div>
-    """
-    
-    return state, full_html
-
-
-@spaces.GPU(duration=120)
-def extract_glb(
-    state: dict,
-    decimation_target: int,
+    slat_guidance_strength: float,
+    slat_sampling_steps: int,
+    multiimage_algo: Literal["multidiffusion", "stochastic"],
+    mesh_simplify: float,
     texture_size: int,
     req: gr.Request,
-    progress=gr.Progress(track_tqdm=True),
-) -> Tuple[str, str]:
+) -> Tuple[dict, str, str, str]:
     """
-    Extract a GLB file from the 3D model.
+    Convert an image to a 3D model and extract GLB file.
 
     Args:
-        state (dict): The state of the generated 3D model.
-        decimation_target (int): The target face count for decimation.
+        image (Image.Image): The input image.
+        multiimages (List[Tuple[Image.Image, str]]): The input images in multi-image mode.
+        is_multiimage (bool): Whether is in multi-image mode.
+        seed (int): The random seed.
+        ss_guidance_strength (float): The guidance strength for sparse structure generation.
+        ss_sampling_steps (int): The number of sampling steps for sparse structure generation.
+        slat_guidance_strength (float): The guidance strength for structured latent generation.
+        slat_sampling_steps (int): The number of sampling steps for structured latent generation.
+        multiimage_algo (Literal["multidiffusion", "stochastic"]): The algorithm for multi-image generation.
+        mesh_simplify (float): The mesh simplification factor.
         texture_size (int): The texture resolution.
 
     Returns:
+        dict: The information of the generated 3D model.
+        str: The path to the video of the 3D model.
         str: The path to the extracted GLB file.
+        str: The path to the extracted GLB file (for download).
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
-    shape_slat, tex_slat, res = unpack_state(state)
-    mesh = pipeline.decode_latent(shape_slat, tex_slat, res)[0]
-    mesh.simplify(16777216)
-    glb = o_voxel.postprocess.to_glb(
-        vertices=mesh.vertices,
-        faces=mesh.faces,
-        attr_volume=mesh.attrs,
-        coords=mesh.coords,
-        attr_layout=pipeline.pbr_attr_layout,
-        grid_size=res,
-        aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-        decimation_target=decimation_target,
-        texture_size=texture_size,
-        remesh=True,
-        remesh_band=1,
-        remesh_project=0,
-        use_tqdm=True,
-    )
-    now = datetime.now()
-    timestamp = now.strftime("%Y-%m-%dT%H%M%S") + f".{now.microsecond // 1000:03d}"
-    os.makedirs(user_dir, exist_ok=True)
-    glb_path = os.path.join(user_dir, f'ashes_{timestamp}.glb')
-    glb.export(glb_path, extension_webp=True)
+    
+    # Generate 3D model
+    if not is_multiimage:
+        outputs = pipeline.run(
+            image,
+            seed=seed,
+            formats=["gaussian", "mesh"],
+            preprocess_image=False,
+            sparse_structure_sampler_params={
+                "steps": ss_sampling_steps,
+                "cfg_strength": ss_guidance_strength,
+            },
+            slat_sampler_params={
+                "steps": slat_sampling_steps,
+                "cfg_strength": slat_guidance_strength,
+            },
+        )
+    else:
+        outputs = pipeline.run_multi_image(
+            [image[0] for image in multiimages],
+            seed=seed,
+            formats=["gaussian", "mesh"],
+            preprocess_image=False,
+            sparse_structure_sampler_params={
+                "steps": ss_sampling_steps,
+                "cfg_strength": ss_guidance_strength,
+            },
+            slat_sampler_params={
+                "steps": slat_sampling_steps,
+                "cfg_strength": slat_guidance_strength,
+            },
+            mode=multiimage_algo,
+        )
+    
+    # Render video
+    video = render_utils.render_video(outputs['gaussian'][0], num_frames=120)['color']
+    video_geo = render_utils.render_video(outputs['mesh'][0], num_frames=120)['normal']
+    video = [np.concatenate([video[i], video_geo[i]], axis=1) for i in range(len(video))]
+    video_path = os.path.join(user_dir, 'ashes-preview.mp4')
+    imageio.mimsave(video_path, video, fps=15)
+    
+    # Extract GLB
+    gs = outputs['gaussian'][0]
+    mesh = outputs['mesh'][0]
+    glb = postprocessing_utils.to_glb(gs, mesh, simplify=mesh_simplify, texture_size=texture_size, verbose=False)
+    glb_path = os.path.join(user_dir, 'ashes-model.glb')
+    glb.export(glb_path)
+    
+    # Pack state for optional Gaussian extraction
+    state = pack_state(gs, mesh)
+    
     torch.cuda.empty_cache()
-    return glb_path, glb_path
+    return state, video_path, glb_path, glb_path
+
+
+@spaces.GPU
+def extract_gaussian(state: dict, req: gr.Request) -> Tuple[str, str]:
+    """
+    Extract a Gaussian splatting file from the generated 3D model.
+    
+    This function is called when the user clicks "Extract Gaussian" button.
+    It converts the 3D model state into a .ply file format containing
+    Gaussian splatting data for advanced 3D applications.
+
+    Args:
+        state (dict): The state of the generated 3D model containing Gaussian data
+        req (gr.Request): Gradio request object for session management
+
+    Returns:
+        Tuple[str, str]: Paths to the extracted Gaussian file (for display and download)
+    """
+    user_dir = os.path.join(TMP_DIR, str(req.session_hash))
+    gs, _ = unpack_state(state)
+    gaussian_path = os.path.join(user_dir, 'ashes-gaussian.ply')
+    gs.save_ply(gaussian_path)
+    torch.cuda.empty_cache()
+    return gaussian_path, gaussian_path
+
+
+def prepare_multi_example() -> List[Image.Image]:
+    multi_case = list(set([i.rsplit('_', 1)[0] for i in os.listdir("assets/example_multi_image") if i.lower().endswith(".png")]))
+    images = []
+    for case in multi_case:
+        _images = []
+        for i in range(1, 4):
+            img = Image.open(f'assets/example_multi_image/{case}_{i}.png')
+            W, H = img.size
+            img = img.resize((int(W / H * 512), 512))
+            _images.append(np.array(img))
+        images.append(Image.fromarray(np.concatenate(_images, axis=1)))
+    return images
+
+
+def split_image(image: Image.Image) -> List[Image.Image]:
+    """
+    Split a multi-view image into separate view images.
+    
+    This function is called when users select multi-image examples that contain
+    multiple views in a single concatenated image. It automatically splits them
+    based on alpha channel boundaries and preprocesses each view.
+    
+    Args:
+        image (Image.Image): A concatenated image containing multiple views
+        
+    Returns:
+        List[Image.Image]: List of individual preprocessed view images
+    """
+    image = np.array(image)
+    alpha = image[..., 3]
+    alpha = np.any(alpha>0, axis=0)
+    start_pos = np.where(~alpha[:-1] & alpha[1:])[0].tolist()
+    end_pos = np.where(alpha[:-1] & ~alpha[1:])[0].tolist()
+    images = []
+    for s, e in zip(start_pos, end_pos):
+        images.append(Image.fromarray(image[:, s:e+1]))
+    return [preprocess_image(image) for image in images]
 
 
 with gr.Blocks(delete_cache=(600, 600)) as demo:
     gr.Markdown("""
     ## Ashes 3D Engine
-    * Upload an image (preferably with an alpha-masked foreground object) and click Generate to create a 3D asset.
-    * Click Extract GLB to export and download the generated GLB file if you're satisfied with the result. Otherwise, try another time.
-    * *Note: Uploaded images are temporarily cached on Hugging Face server and permanently deleted after session ends.
-       Uploads and generated files are cached temporarily by the generation worker. Do not upload sensitive or private information.*
+    * Upload an image and click "Generate & Extract GLB" to create a 3D asset and automatically extract the GLB file.
+    * If you want the Gaussian file as well, click "Extract Gaussian" after generation.
+    * If the image has alpha channel, it will be used as the mask. Otherwise, we use `rembg` to remove the background.
+    
+    âœ¨New: 1) Experimental multi-image support. 2) Gaussian file extraction.
     """)
     
     with gr.Row():
-        with gr.Column(scale=1, min_width=360):
-            image_prompt = gr.Image(label="Image Prompt", format="png", image_mode="RGBA", type="pil", sources=["upload", "clipboard"], height=400)
+        with gr.Column():
+            with gr.Tabs() as input_tabs:
+                with gr.Tab(label="Single Image", id=0) as single_image_input_tab:
+                    image_prompt = gr.Image(label="Image Prompt", format="png", image_mode="RGBA", type="pil", height=300)
+                with gr.Tab(label="Multiple Images", id=1) as multiimage_input_tab:
+                    multiimage_prompt = gr.Gallery(label="Image Prompt", format="png", type="pil", height=300, columns=3)
+                    gr.Markdown("""
+                        Input different views of the object in separate images. 
+                        
+                        *NOTE: this is an experimental algorithm without training a specialized model. It may not produce the best results for all images, especially those having different poses or inconsistent details.*
+                    """)
             
-            resolution = gr.Radio(["512", "1024", "1536"], label="Resolution", value="1024")
-            seed = gr.Slider(0, MAX_SEED, label="Seed", value=0, step=1)
-            randomize_seed = gr.Checkbox(label="Randomize Seed", value=True)
-            decimation_target = gr.Slider(100000, 500000, label="Decimation Target", value=300000, step=10000)
-            texture_size = gr.Slider(1024, 4096, label="Texture Size", value=2048, step=1024)
-            
-            generate_btn = gr.Button("Generate")
-                
-            with gr.Accordion(label="Advanced Settings", open=False):                
+            with gr.Accordion(label="Generation Settings", open=False):
+                seed = gr.Slider(0, MAX_SEED, label="Seed", value=0, step=1)
+                randomize_seed = gr.Checkbox(label="Randomize Seed", value=True)
                 gr.Markdown("Stage 1: Sparse Structure Generation")
                 with gr.Row():
-                    ss_guidance_strength = gr.Slider(1.0, 10.0, label="Guidance Strength", value=7.5, step=0.1)
-                    ss_guidance_rescale = gr.Slider(0.0, 1.0, label="Guidance Rescale", value=0.7, step=0.01)
+                    ss_guidance_strength = gr.Slider(0.0, 10.0, label="Guidance Strength", value=7.5, step=0.1)
                     ss_sampling_steps = gr.Slider(1, 50, label="Sampling Steps", value=12, step=1)
-                    ss_rescale_t = gr.Slider(1.0, 6.0, label="Rescale T", value=5.0, step=0.1)
-                gr.Markdown("Stage 2: Shape Generation")
+                gr.Markdown("Stage 2: Structured Latent Generation")
                 with gr.Row():
-                    shape_slat_guidance_strength = gr.Slider(1.0, 10.0, label="Guidance Strength", value=7.5, step=0.1)
-                    shape_slat_guidance_rescale = gr.Slider(0.0, 1.0, label="Guidance Rescale", value=0.5, step=0.01)
-                    shape_slat_sampling_steps = gr.Slider(1, 50, label="Sampling Steps", value=12, step=1)
-                    shape_slat_rescale_t = gr.Slider(1.0, 6.0, label="Rescale T", value=3.0, step=0.1)
-                gr.Markdown("Stage 3: Material Generation")
-                with gr.Row():
-                    tex_slat_guidance_strength = gr.Slider(1.0, 10.0, label="Guidance Strength", value=1.0, step=0.1)
-                    tex_slat_guidance_rescale = gr.Slider(0.0, 1.0, label="Guidance Rescale", value=0.0, step=0.01)
-                    tex_slat_sampling_steps = gr.Slider(1, 50, label="Sampling Steps", value=12, step=1)
-                    tex_slat_rescale_t = gr.Slider(1.0, 6.0, label="Rescale T", value=3.0, step=0.1)                
+                    slat_guidance_strength = gr.Slider(0.0, 10.0, label="Guidance Strength", value=3.0, step=0.1)
+                    slat_sampling_steps = gr.Slider(1, 50, label="Sampling Steps", value=12, step=1)
+                multiimage_algo = gr.Radio(["stochastic", "multidiffusion"], label="Multi-image Algorithm", value="stochastic")
+            
+            with gr.Accordion(label="GLB Extraction Settings", open=False):
+                mesh_simplify = gr.Slider(0.9, 0.98, label="Simplify", value=0.95, step=0.01)
+                texture_size = gr.Slider(512, 2048, label="Texture Size", value=1024, step=512)
 
-        with gr.Column(scale=10):
-            with gr.Walkthrough(selected=0) as walkthrough:
-                with gr.Step("Preview", id=0):
-                    preview_output = gr.HTML(empty_html, label="3D Asset Preview", show_label=True, container=True)
-                    extract_btn = gr.Button("Extract GLB")
-                with gr.Step("Extract", id=1):
-                    glb_output = gr.Model3D(label="Extracted GLB", height=724, show_label=True, display_mode="solid", clear_color=(0.25, 0.25, 0.25, 1.0))
-                    download_btn = gr.DownloadButton(label="Download GLB")
-            gr.Markdown("*We are actively working on improving the speed of GLB extraction. Currently, it may take half a minute or more and face count is limited.*")
-                    
-        with gr.Column(scale=1, min_width=172):
-            examples = gr.Examples(
-                examples=[
-                    f'assets/example_image/{image}'
-                    for image in os.listdir("assets/example_image")
-                ],
-                inputs=[image_prompt],
-                fn=preprocess_image,
-                outputs=[image_prompt],
-                run_on_click=True,
-                examples_per_page=18,
-            )
-                    
-    output_buf = gr.State()
+            generate_btn = gr.Button("Generate & Extract GLB", variant="primary")
+            extract_gs_btn = gr.Button("Extract Gaussian", interactive=False)
+            gr.Markdown("""
+                        *NOTE: Gaussian file can be very large (~50MB), it will take a while to display and download.*
+                        """)
+
+        with gr.Column():
+            video_output = gr.Video(label="Generated 3D Asset", autoplay=True, loop=True, height=300)
+            model_output = LitModel3D(label="Extracted GLB/Gaussian", exposure=10.0, height=300)
+            
+            with gr.Row():
+                download_glb = gr.DownloadButton(label="Download GLB", interactive=False)
+                download_gs = gr.DownloadButton(label="Download Gaussian", interactive=False)  
     
+    is_multiimage = gr.State(False)
+    output_buf = gr.State()
+
+    # Example images at the bottom of the page
+    with gr.Row() as single_image_example:
+        examples = gr.Examples(
+            examples=[
+                f'assets/example_image/{image}'
+                for image in os.listdir("assets/example_image") if image.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+            ],
+            inputs=[image_prompt],
+            fn=preprocess_image,
+            outputs=[image_prompt],
+            run_on_click=True,
+            examples_per_page=64,
+        )
+    with gr.Row(visible=False) as multiimage_example:
+        examples_multi = gr.Examples(
+            examples=prepare_multi_example(),
+            inputs=[image_prompt],
+            fn=split_image,
+            outputs=[multiimage_prompt],
+            run_on_click=True,
+            examples_per_page=8,
+        )
 
     # Handlers
     demo.load(start_session)
     demo.unload(end_session)
     
+    single_image_input_tab.select(
+        lambda: tuple([False, gr.Row.update(visible=True), gr.Row.update(visible=False)]),
+        outputs=[is_multiimage, single_image_example, multiimage_example]
+    )
+    multiimage_input_tab.select(
+        lambda: tuple([True, gr.Row.update(visible=False), gr.Row.update(visible=True)]),
+        outputs=[is_multiimage, single_image_example, multiimage_example]
+    )
+    
     image_prompt.upload(
         preprocess_image,
         inputs=[image_prompt],
         outputs=[image_prompt],
+    )
+    multiimage_prompt.upload(
+        preprocess_images,
+        inputs=[multiimage_prompt],
+        outputs=[multiimage_prompt],
     )
 
     generate_btn.click(
@@ -633,57 +487,41 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
         inputs=[randomize_seed, seed],
         outputs=[seed],
     ).then(
-        lambda: gr.Walkthrough(selected=0), outputs=walkthrough
+        generate_and_extract_glb,
+        inputs=[image_prompt, multiimage_prompt, is_multiimage, seed, ss_guidance_strength, ss_sampling_steps, slat_guidance_strength, slat_sampling_steps, multiimage_algo, mesh_simplify, texture_size],
+        outputs=[output_buf, video_output, model_output, download_glb],
     ).then(
-        image_to_3d,
-        inputs=[
-            image_prompt, seed, resolution,
-            ss_guidance_strength, ss_guidance_rescale, ss_sampling_steps, ss_rescale_t,
-            shape_slat_guidance_strength, shape_slat_guidance_rescale, shape_slat_sampling_steps, shape_slat_rescale_t,
-            tex_slat_guidance_strength, tex_slat_guidance_rescale, tex_slat_sampling_steps, tex_slat_rescale_t,
-        ],
-        outputs=[output_buf, preview_output],
+        lambda: tuple([gr.Button(interactive=True), gr.Button(interactive=True)]),
+        outputs=[extract_gs_btn, download_glb],
+    )
+
+    video_output.clear(
+        lambda: tuple([gr.Button(interactive=False), gr.Button(interactive=False), gr.Button(interactive=False)]),
+        outputs=[extract_gs_btn, download_glb, download_gs],
     )
     
-    extract_btn.click(
-        lambda: gr.Walkthrough(selected=1), outputs=walkthrough
+    extract_gs_btn.click(
+        extract_gaussian,
+        inputs=[output_buf],
+        outputs=[model_output, download_gs],
     ).then(
-        extract_glb,
-        inputs=[output_buf, decimation_target, texture_size],
-        outputs=[glb_output, download_btn],
+        lambda: gr.Button(interactive=True),
+        outputs=[download_gs],
     )
-        
+
+    model_output.clear(
+        lambda: tuple([gr.Button(interactive=False), gr.Button(interactive=False)]),
+        outputs=[download_glb, download_gs],
+    )
+    
 
 # Launch the Gradio app
 if __name__ == "__main__":
-    os.makedirs(TMP_DIR, exist_ok=True)
-
-    # Construct ui components
-    btn_img_base64_strs = {}
-    for i in range(len(MODES)):
-        icon = Image.open(MODES[i]['icon'])
-        MODES[i]['icon_base64'] = image_to_base64(icon)
-
-    rmbg_client = Client("briaai/BRIA-RMBG-2.0")
-    pipeline = Trellis2ImageTo3DPipeline.from_pretrained('microsoft/TRELLIS.2-4B')
-    pipeline.rembg_model = None
-    pipeline.low_vram = False
+    pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")
     pipeline.cuda()
-    
-    envmap = {
-        'forest': EnvMap(torch.tensor(
-            cv2.cvtColor(cv2.imread('assets/hdri/forest.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-            dtype=torch.float32, device='cuda'
-        )),
-        'sunset': EnvMap(torch.tensor(
-            cv2.cvtColor(cv2.imread('assets/hdri/sunset.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-            dtype=torch.float32, device='cuda'
-        )),
-        'courtyard': EnvMap(torch.tensor(
-            cv2.cvtColor(cv2.imread('assets/hdri/courtyard.exr', cv2.IMREAD_UNCHANGED), cv2.COLOR_BGR2RGB),
-            dtype=torch.float32, device='cuda'
-        )),
-    }
-    
-    demo.launch(css=css, head=head)
+    try:
+        pipeline.preprocess_image(Image.fromarray(np.zeros((512, 512, 3), dtype=np.uint8)))    # Preload rembg
+    except:
+        pass
+    demo.launch(mcp_server=True)
 
