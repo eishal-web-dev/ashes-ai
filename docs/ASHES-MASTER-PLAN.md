@@ -3,6 +3,10 @@
 > **Status:** Active product direction as of August 2026.
 >
 > This document is the canonical source of truth for Ashes. If an older README, prototype, chat, or legacy module conflicts with this file, follow this file unless a later dated decision in `docs/decision-log.md` explicitly replaces it.
+>
+> For the fast operational view of **what is already done, what is being worked on now, and what comes next**, read `docs/CURRENT-STATUS.md`.
+>
+> **Prototype protection:** this strategy document does not authorize changes to the existing prototype view, prototype UI, prototype routes, demo behavior, or prototype runtime code. The working prototype is preserved unless the founder explicitly requests a prototype change.
 
 ## 1. One-sentence definition
 
@@ -421,6 +425,7 @@ Do not delay validation for:
 - automatic generation of an entire unbounded catalog
 - rebuilding checkout
 - unrelated AI features
+- redesigning or rewriting the existing working prototype without an explicit request
 
 ## 19. Current implementation state
 
@@ -434,10 +439,12 @@ The repository already includes substantial legacy and current infrastructure:
 - local + S3-compatible storage abstraction
 - product generation background job path
 - TRELLIS worker tooling
-- remote disposable-worker integration in progress
+- remote disposable-worker integration
 - GLB viewer/prototype assets
 
-Some existing code and pricing settings were built for earlier Ashes versions and may not yet reflect this master product direction. Refactors should migrate toward this document rather than treating every legacy module as a current requirement.
+Some existing code and pricing settings were built for earlier Ashes versions and may not yet reflect this master product direction. Refactors should migrate new/current commerce work toward this document rather than treating every legacy module as a current requirement.
+
+The existing prototype remains intentionally preserved even where it represents an earlier product stage.
 
 ## 20. Immediate next engineering milestone
 
@@ -462,7 +469,9 @@ After this passes reliably, build the Shopify installation/catalog/publishing pa
 Before making a major feature, architecture, pricing, or positioning change:
 
 1. read this document,
-2. read `docs/decision-log.md`,
-3. decide whether the change supports the current milestone,
-4. update documentation when the decision changes,
-5. keep experimental ideas clearly labelled as experiments rather than implemented facts.
+2. read `docs/CURRENT-STATUS.md`,
+3. read `docs/decision-log.md`,
+4. decide whether the change supports the current milestone,
+5. update documentation when the decision changes,
+6. keep experimental ideas clearly labelled as experiments rather than implemented facts,
+7. do not modify the existing prototype unless the founder explicitly requests it.
