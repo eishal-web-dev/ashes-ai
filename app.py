@@ -29,4 +29,5 @@ demo = gr.Interface(
     submit_btn="Test Cloud GPU",
 )
 
-demo.launch()
+demo.launch(ssr_mode=False, show_error=True)
+
