@@ -1,165 +1,183 @@
-# Ashes AI
+# Ashes
 
-Ashes AI is a multi-tenant AI-powered 3D/AR commerce platform for restaurants, cafés, retailers, and product brands.
+Ashes is an AI-powered **product digital-twin and visual-commerce platform** for ecommerce merchants.
 
-## Vision
+The core idea is simple:
 
-One platform. Many businesses. One customer experience.
+> **Generate a product once, store it permanently, and reuse the same digital twin everywhere the merchant sells.**
 
-Businesses join Ashes AI, create a storefront, upload a product or menu photo, attach or generate a 3D asset, and receive QR codes. Customers scan the QR with their phone and open the same Ashes web app/PWA to view the item in interactive 3D or AR — no separate app per restaurant or brand.
+Ashes is being built to turn existing product imagery into reusable 3D commerce assets, starting with Shopify and expanding later to Amazon, WooCommerce and other channels. Future modules include AR placement, virtual try-on, product recommendations and visual-commerce analytics.
 
-## MVP
+## Canonical documentation
 
-- Business onboarding
-- Multi-tenant business profiles
-- Restaurant / café / retail support
-- Product and menu item management
-- AI menu-card import
-- One-photo product upload workflow
-- 3D asset status and GLB support
-- QR code generation
-- Public QR landing pages
-- Interactive 3D viewer
-- AR-ready viewer architecture
-- Nutrition fields for food items
-- Business dashboard
-- Multi-item ordering and live order status
-- Analytics
-- PWA-first customer experience
+The product direction changed significantly from the original restaurant/QR-first prototype. To avoid old modules or old chats becoming the source of truth, read these files before making major changes:
 
-## Core customer flow
+1. **[`docs/ASHES-MASTER-PLAN.md`](docs/ASHES-MASTER-PLAN.md)** — canonical product vision and current strategy
+2. **[`docs/architecture.md`](docs/architecture.md)** — technical architecture and Product Twin model
+3. **[`docs/roadmap.md`](docs/roadmap.md)** — ordered MVP/growth roadmap
+4. **[`docs/business-model.md`](docs/business-model.md)** — pricing, monetization and unit-economics hypotheses
+5. **[`docs/decision-log.md`](docs/decision-log.md)** — dated record of major decisions and why they were made
 
-1. Scan an Ashes QR code.
-2. Open the business/menu instantly in the browser.
-3. Browse products and add multiple items to a cart.
-4. View products in interactive 3D.
-5. Launch AR where the device supports it.
-6. Place a table order and follow its live status.
+If an older prototype or document conflicts with the master plan, follow the master plan unless a later decision explicitly supersedes it.
 
-## Core business flow
-
-1. Create a business account.
-2. Upload an existing menu card or add products manually.
-3. Review AI-created draft menu items.
-4. Attach clean product photos.
-5. Generate 3D assets.
-6. Review and publish products.
-7. Generate table/product QR codes.
-8. Receive and manage live orders.
-9. View scans, AR launches, and engagement analytics.
-
-## Architecture
+## Current product definition
 
 ```text
-Customer Phone
-     |
-     | Scan QR
-     v
-Ashes PWA / Web App
-     |
-     +--> Business storefront / full menu
-     +--> Cart + ordering
-     +--> Product 3D / AR viewer
-     |
-     v
-Ashes FastAPI API
-     |
-     +--> Authentication
-     +--> Multi-tenant businesses
-     +--> Products / menu imports
-     +--> Orders / table QR codes
-     +--> Analytics
-     +--> Image-to-3D service
-     |
-     +--> MongoDB
-     +--> S3-compatible object storage (production)
+Merchant catalog / product image
+          |
+          v
+     Ashes Product Twin
+          |
+     asset exists?
+       /      \
+     yes       no
+      |         |
+      |     generation job
+      |         |
+      |         v
+      |   disposable GPU worker
+      |         |
+      |         v
+      |     TRELLIS/provider
+      |         |
+      +----> commerce-ready GLB
+                 |
+                 v
+           S3/R2 + CDN
+                 |
+       +---------+---------+
+       |                   |
+       v                   v
+    Shopify             Amazon later
+       |
+       v
+  3D / AR / future try-on
 ```
 
-## Stack
+The GPU is used only to **create** a missing product asset. Shopper views load the already-stored model and do not require reconstruction compute.
+
+## Current engineering milestone
+
+Before expanding the platform, Ashes must reliably prove this path:
+
+```text
+real product image
+ -> Ashes API
+ -> asynchronous generation
+ -> disposable/free GPU during testing
+ -> real GLB
+ -> permanent S3/R2 object
+ -> viewer still works after GPU shuts down
+```
+
+After this is stable, the next major build is the Shopify installation/catalog/publishing flow.
+
+## Immediate commercial direction
+
+### Connector #1: Shopify
+
+A merchant should eventually be able to:
+
+1. install/connect Ashes,
+2. authorize Shopify,
+3. let Ashes detect their products,
+4. select products or approve Ashes recommendations,
+5. generate or reuse a Product Twin,
+6. publish a lightweight `View in 3D` experience,
+7. keep normal Shopify cart/checkout,
+8. see Ashes interaction/commerce analytics over time.
+
+### Connector #2: Amazon
+
+The same merchant account and Product Twin library should later map the same physical products to Amazon listings so Ashes can reuse the existing 3D asset rather than regenerate it.
+
+## Long-term visual-commerce modules
+
+These are strategic directions, not MVP requirements:
+
+- furniture/home-decor AR placement
+- fashion virtual try-on / AI fitting room
+- `Complete the look` recommendations using real merchant inventory
+- room-set recommendations
+- multi-channel Product Twin publishing
+- commerce analytics and influenced-revenue reporting
+- enterprise API and bulk catalog workflows
+
+## Tech stack
 
 - **Frontend:** React + Vite
-- **PWA:** Vite PWA
-- **3D/AR:** `<model-viewer>`, Three.js / WebXR where needed
 - **Backend:** FastAPI
 - **Database:** MongoDB / MongoDB Atlas
-- **Object storage:** local filesystem in development; S3-compatible storage such as Cloudflare R2 in production
-- **Auth:** signed bearer tokens
-- **QR:** server-generated QR images and deep links
-- **Menu AI:** configurable vision provider, including an OpenAI image-input adapter
-- **3D generation:** provider-agnostic adapter for TripoSR, Stable Fast 3D, Hunyuan3D or an external API
+- **3D viewing:** `<model-viewer>`, Three.js / WebXR where needed
+- **3D generation:** provider-agnostic Ashes adapter; TRELLIS is the current active testing path
+- **Storage:** local in development; S3-compatible object storage in production
+- **GPU:** disposable/remote workers during validation; cloud/dedicated/hybrid later
+- **Billing:** existing billing modules are present but public plan logic is being realigned with the current commerce model
 
-## MongoDB backend
+## Relevant implementation paths
 
-The official backend entrypoint is:
+```text
+apps/api/services/three_d.py          generation provider/remote worker adapter
+apps/api/storage.py                   local + S3-compatible storage abstraction
+apps/api/storage_main.py              background generation + permanent storage handoff
+tools/trellis/ashes_trellis_worker.py disposable TRELLIS GPU worker
+src/                                   React frontend
+```
+
+## Backend development
+
+The MongoDB-backed API entrypoint is:
 
 ```bash
 uvicorn apps.api.mongo_main:app --host 0.0.0.0 --port 8000
 ```
 
-Environment:
+Minimum local database environment:
 
 ```env
 MONGODB_URI=mongodb://localhost:27017
 MONGODB_DB=ashes_ai
 ```
 
-Use a MongoDB Atlas connection URI in production. See `docs/mongodb-setup.md`.
+See `.env.example` and `docs/mongodb-setup.md` for environment details.
 
-## Multi-tenant model
+## Storage / GPU configuration
 
-```text
-Ashes AI
-├── Business A
-│   ├── Products / Menu Items
-│   ├── Orders
-│   ├── Table QR Codes
-│   └── Analytics
-├── Business B
-│   ├── Products
-│   └── Orders
-└── Business C
+Development may use local storage. Production should use S3-compatible storage.
+
+The current remote 3D worker path is configured with:
+
+```env
+ASHES_TRELLIS_WORKER_URL=
+ASHES_TRELLIS_WORKER_TOKEN=
+ASHES_3D_TIMEOUT=900
+ASHES_STORAGE_PROVIDER=local
 ```
 
-Every business-owned document is scoped by `business_id`.
+For S3/R2-compatible production storage, see `.env.example`.
 
-## Important product rules
+## Current repository history / legacy modules
 
-- AI-imported menu information is created as **draft data** and must be reviewed before publishing.
-- Nutrition generated by AI must be labelled as an estimate unless verified by the business.
-- Allergens must be confirmed by the business and should never be silently guessed.
-- Backend order totals are recalculated from stored product prices rather than trusted from the customer client.
+Ashes previously explored restaurants, QR menus, nutrition, table ordering and a standalone PWA experience. Much of that code remains because it is real working history and may still provide reusable components.
 
-## Website-to-3D prototype
+However:
 
-The public prototype lives at `/prototype` and demonstrates the complete pitch flow:
+> **Do not assume every existing restaurant/menu/QR module is part of the current primary roadmap.**
 
-1. Paste a public merchant website URL.
-2. Extract a read-only product catalog.
-3. Open a rotatable interactive product twin.
-4. Generate and download a smart SVG QR code.
-5. Share a deep link that reopens the exact product experience.
+The current commercial priority is Ashes Commerce: reusable Product Twins for ecommerce channels.
 
-For a presentation or LinkedIn link, use `/prototype?demo=1`. It opens the curated showcase immediately, so the demo does not depend on a third-party website allowing automated catalog access.
+## Validation rule
 
-## Render deployment
+Do not optimize for feature count. Optimize for evidence.
 
-The repository includes a two-service Render Blueprint:
+```text
+1 real generated product
+ -> 1 real Shopify merchant
+ -> 10 merchants
+ -> first paid renewals
+ -> $1k MRR
+ -> $10k MRR
+ -> multi-channel expansion
+```
 
-- `ashes-web`: React/Vite static frontend with SPA rewrites.
-- `ashes-api`: FastAPI service with MongoDB, QR, catalog and commerce endpoints.
-
-After creating the Blueprint, set these minimum values:
-
-- Frontend `VITE_API_BASE_URL`: the deployed `ashes-api` URL.
-- API `MONGODB_URI`: the MongoDB Atlas connection string.
-- API `ASHES_ALLOWED_ORIGINS`: the deployed `ashes-web` origin.
-- API `ASHES_PUBLIC_BASE_URL`: the deployed frontend origin.
-- API `ASHES_API_BASE_URL`: the deployed API origin.
-
-Optional AI, storage and billing variables in `render.yaml` are required only for their corresponding production features.
-
-## Development status
-
-Ashes has a MongoDB-backed MVP path with business auth, catalog management, AI menu import, product-photo-to-3D workflow, QR/table sessions, ordering, analytics, branding, notifications, and PWA support.
-
-Runtime/device/GPU behavior still needs end-to-end validation before production launch.
+The first proof is not a beautiful landing page. It is a real merchant product becoming a permanent, useful 3D commerce asset.
