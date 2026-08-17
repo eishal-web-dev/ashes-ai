@@ -9,6 +9,7 @@ export function getCommerceSource(slug){return call(`/api/businesses/${slug}/com
 export function getPublicCommerceSource(slug){return call(`/api/public/businesses/${slug}/commerce-source`)}
 export function saveCommerceSource(slug,values){return call(`/api/businesses/${slug}/commerce-source`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)},true)}
 export function importCommerceWebsite(slug,url,maxPages=12){return call(`/api/businesses/${slug}/commerce-source/import`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,max_pages:maxPages})},true)}
+export function generateImported3D(slug,productIds=[],limit=12){return call(`/api/businesses/${slug}/commerce-source/generate-3d`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({product_ids:productIds,limit})},true)}
 export function getProductCommerce(productId){return call(`/api/products/${productId}/commerce`)}
 export function saveProductCommerce(slug,productId,values){return call(`/api/businesses/${slug}/products/${productId}/commerce`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)},true)}
 export function createCommerceHandoff(slug,values){return call(`/api/businesses/${slug}/commerce-handoff`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)})}

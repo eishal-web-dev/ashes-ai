@@ -4,6 +4,7 @@ import ipaddress
 import json
 import re
 import socket
+import threading
 import uuid
 from html.parser import HTMLParser
 from typing import Any, Optional
@@ -15,8 +16,10 @@ from pydantic import BaseModel
 
 from apps.api.mongo_main import app, auth_user, owned_business
 from apps.api.mongo_db import collection, create_product as mongo_create_product, get_business_by_slug, get_product, now_iso, update_product
+from apps.api.services.three_d import generate_3d
 
 UA = "AshesCatalogBot/1.0 (+authorized merchant catalog import)"
+IMPORTED_GENERATION_LOCK = threading.Lock()
 
 
 class CommerceSourcePayload(BaseModel):
@@ -31,6 +34,11 @@ class CommerceSourcePayload(BaseModel):
 class ImportPayload(BaseModel):
     url: str
     max_pages: int = 12
+
+
+class GenerateImported3DPayload(BaseModel):
+    product_ids: Optional[list[str]] = None
+    limit: int = 12
 
 
 class ProductLinkPayload(BaseModel):
@@ -146,7 +154,6 @@ def _looks_like_glb(value: str) -> bool:
 def _extract_model_urls(url: str, html: str, parser: CatalogParser) -> list[str]:
     """Find GLB assets exposed in markup, JSON state, or model-viewer elements."""
     candidates = list(parser.model_urls)
-    # Commerce sites commonly serialize model URLs as JSON with escaped slashes.
     normalized = html.replace("\\/", "/").replace("\\u002F", "/").replace("\\u002f", "/")
     candidates.extend(re.findall(r"https?://[^\"'<>\\s]+?(?:\.glb(?:\?[^\"'<>\\s]*)?|glb_draco[^\"'<>\\s]*)", normalized, re.I))
 
@@ -157,6 +164,33 @@ def _extract_model_urls(url: str, html: str, parser: CatalogParser) -> list[str]
         if parsed.scheme in {"http", "https"} and parsed.netloc and _looks_like_glb(model_url):
             resolved.append(model_url)
     return list(dict.fromkeys(resolved))
+
+
+def _image_candidates(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(_image_candidates(item))
+        return result
+    if isinstance(value, dict):
+        result = []
+        for key in ("url", "contentUrl", "thumbnailUrl"):
+            if value.get(key):
+                result.extend(_image_candidates(value[key]))
+        return result
+    return []
+
+
+def _resolve_product_images(base_url: str, value: Any) -> list[str]:
+    resolved: list[str] = []
+    for candidate in _image_candidates(value):
+        image_url = urljoin(base_url, candidate).replace("&amp;", "&")
+        parsed = urlparse(image_url)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            resolved.append(image_url)
+    return list(dict.fromkeys(resolved))[:6]
 
 
 def _extract_product(url: str, html: str) -> tuple[Optional[dict], list[str]]:
@@ -172,11 +206,12 @@ def _extract_product(url: str, html: str) -> tuple[Optional[dict], list[str]]:
             if "Product" not in types: continue
             offers = node.get("offers") or {}
             if isinstance(offers, list): offers = offers[0] if offers else {}
-            image = node.get("image")
-            if isinstance(image, list): image = image[0] if image else None
-            if isinstance(image, dict): image = image.get("url")
+            image_urls = _resolve_product_images(url, node.get("image"))
             candidates.append({
-                "name": node.get("name"), "description": node.get("description"), "image_url": image,
+                "name": node.get("name"),
+                "description": node.get("description"),
+                "image_url": image_urls[0] if image_urls else None,
+                "image_urls": image_urls,
                 "price": _money(offers.get("price") if isinstance(offers, dict) else None),
                 "currency": offers.get("priceCurrency") if isinstance(offers, dict) else None,
                 "external_product_id": node.get("sku") or node.get("productID") or node.get("mpn"),
@@ -189,7 +224,16 @@ def _extract_product(url: str, html: str) -> tuple[Optional[dict], list[str]]:
         name = parser.meta.get("og:title") or parser.meta.get("twitter:title") or parser.title.strip()
         price = _money(parser.meta.get("product:price:amount") or parser.meta.get("og:price:amount"))
         image = parser.meta.get("og:image") or parser.meta.get("twitter:image")
-        product = {"name": name, "price": price, "image_url": image, "description": parser.meta.get("og:description"), "source_url": url, "model_url": model_urls[0] if model_urls else None} if price is not None else None
+        image_urls = _resolve_product_images(url, image)
+        product = {
+            "name": name,
+            "price": price,
+            "image_url": image_urls[0] if image_urls else None,
+            "image_urls": image_urls,
+            "description": parser.meta.get("og:description"),
+            "source_url": url,
+            "model_url": model_urls[0] if model_urls else None,
+        } if price is not None else None
     links = [urljoin(url, href) for href in parser.links]
     return product, links
 
@@ -234,6 +278,42 @@ def _source_doc(business_id: str) -> dict:
     row.pop("_id", None); return row
 
 
+def _generation_urls(product: dict) -> list[str]:
+    urls = product.get("external_image_urls") or []
+    if not isinstance(urls, list):
+        urls = []
+    if product.get("external_image_url"):
+        urls = [product.get("external_image_url"), *urls]
+    return list(dict.fromkeys(str(x).strip() for x in urls if str(x).strip()))[:4]
+
+
+def _run_imported_generation_batch(business_id: str, product_ids: list[str]) -> None:
+    """Process imported products serially so one GPU worker is never flooded."""
+    with IMPORTED_GENERATION_LOCK:
+        for product_id in product_ids:
+            product = get_product(product_id)
+            if not product or product.get("business_id") != business_id:
+                continue
+            image_urls = _generation_urls(product)
+            if not image_urls:
+                update_product(product_id, business_id, {"status": "awaiting-image", "error_message": "No usable product images were found during import."})
+                continue
+            update_product(product_id, business_id, {"status": "processing", "error_message": None, "generation_views": len(image_urls)})
+            try:
+                model_path = generate_3d(product_id, image_urls=image_urls)
+                if model_path:
+                    update_product(product_id, business_id, {
+                        "model_path": str(model_path),
+                        "status": "ready",
+                        "error_message": None,
+                        "generation_mode": "multi-image" if len(image_urls) >= 3 else "single-image",
+                    })
+                else:
+                    update_product(product_id, business_id, {"status": "awaiting-generator", "error_message": "No 3D generator configured."})
+            except Exception as exc:
+                update_product(product_id, business_id, {"status": "failed", "error_message": str(exc)[:600]})
+
+
 @app.get("/api/businesses/{slug}/commerce-source")
 def get_commerce_source(slug: str, user: dict = Depends(auth_user)):
     business = owned_business(user["id"], slug); return _source_doc(business["id"])
@@ -268,11 +348,77 @@ def import_website_catalog(slug: str, payload: ImportPayload, user: dict = Depen
         source_url = item.get("source_url")
         existing = collection("products").find_one({"business_id": business["id"], "source_url": source_url}) if source_url else None
         if existing: continue
-        row = mongo_create_product({"business_id": business["id"], "name": (item.get("name") or "Imported product")[:180], "category": "Imported", "price": float(item.get("price") or 0), "status": "awaiting-image", "is_published": False})
-        update_product(row["id"], business["id"], {"source_url": source_url, "checkout_url": source_url, "external_image_url": item.get("image_url"), "external_model_url": item.get("model_url"), "external_product_id": item.get("external_product_id"), "source_currency": item.get("currency"), "source_description": item.get("description"), "commerce_source_type": "website"})
+        image_urls = item.get("image_urls") or ([item.get("image_url")] if item.get("image_url") else [])
+        row = mongo_create_product({
+            "business_id": business["id"],
+            "name": (item.get("name") or "Imported product")[:180],
+            "category": "Imported",
+            "price": float(item.get("price") or 0),
+            "status": "awaiting-generation" if image_urls else "awaiting-image",
+            "is_published": False,
+        })
+        update_product(row["id"], business["id"], {
+            "source_url": source_url,
+            "checkout_url": source_url,
+            "external_image_url": item.get("image_url"),
+            "external_image_urls": image_urls[:6],
+            "external_model_url": item.get("model_url"),
+            "external_product_id": item.get("external_product_id"),
+            "source_currency": item.get("currency"),
+            "source_description": item.get("description"),
+            "commerce_source_type": "website",
+        })
         created.append({"id": row["id"], **item})
     collection("commerce_imports").insert_one({"id": str(uuid.uuid4()), "business_id": business["id"], "url": payload.url, "found": len(products), "created": len(created), "created_at": now_iso()})
-    return {"found": len(products), "created": len(created), "products": created, "message": "Imported products are Ashes drafts. Review them and add/confirm photos before publishing."}
+    return {"found": len(products), "created": len(created), "products": created, "message": "Imported products are Ashes drafts. Review them, then queue selected products for 3D generation."}
+
+
+@app.post("/api/businesses/{slug}/commerce-source/generate-3d")
+def generate_imported_catalog_3d(slug: str, payload: GenerateImported3DPayload, user: dict = Depends(auth_user)):
+    business = owned_business(user["id"], slug)
+    selected = set(payload.product_ids or [])
+    limit = max(1, min(int(payload.limit or 12), 50))
+    products = list(collection("products").find({"business_id": business["id"]}))
+    queued: list[dict] = []
+    skipped: list[dict] = []
+
+    for product in products:
+        if selected and product.get("id") not in selected:
+            continue
+        if len(queued) >= limit:
+            break
+        if product.get("model_path"):
+            skipped.append({"id": product.get("id"), "name": product.get("name"), "reason": "already-has-model"})
+            continue
+        if product.get("status") in {"queued", "processing"}:
+            skipped.append({"id": product.get("id"), "name": product.get("name"), "reason": "already-queued"})
+            continue
+        image_urls = _generation_urls(product)
+        if not image_urls:
+            skipped.append({"id": product.get("id"), "name": product.get("name"), "reason": "no-images-found"})
+            continue
+        update_product(product["id"], business["id"], {"status": "queued", "error_message": None, "generation_views": len(image_urls)})
+        queued.append({
+            "id": product["id"],
+            "name": product.get("name"),
+            "views": len(image_urls),
+            "mode": "multi-image" if len(image_urls) >= 3 else "single-image",
+        })
+
+    if queued:
+        threading.Thread(
+            target=_run_imported_generation_batch,
+            args=(business["id"], [item["id"] for item in queued]),
+            daemon=True,
+            name=f"ashes-import-3d-{business['id'][:8]}",
+        ).start()
+
+    return {
+        "queued": len(queued),
+        "items": queued,
+        "skipped": skipped[:20],
+        "message": "Ashes queued imported products for one-by-one 3D generation." if queued else "No imported products were ready to queue.",
+    }
 
 
 @app.get("/api/products/{product_id}/commerce")
