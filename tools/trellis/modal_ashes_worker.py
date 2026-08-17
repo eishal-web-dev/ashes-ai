@@ -29,6 +29,8 @@ def _install_trellis_with_gpu() -> None:
     env["TORCH_CUDA_ARCH_LIST"] = "7.5"
     env["FORCE_CUDA"] = "1"
     env["MAX_JOBS"] = "4"
+    env["CC"] = "gcc"
+    env["CXX"] = "g++"
 
     subprocess.run(
         [
@@ -36,6 +38,7 @@ def _install_trellis_with_gpu() -> None:
             "-lc",
             (
                 "set -euxo pipefail; "
+                "export CC=gcc CXX=g++; command -v gcc; command -v g++; "
                 "rm -rf /opt/TRELLIS /tmp/extensions; "
                 "git clone --recurse-submodules https://github.com/microsoft/TRELLIS.git /opt/TRELLIS; "
                 f"cd /opt/TRELLIS; git checkout {TRELLIS_COMMIT}; "
