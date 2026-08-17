@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Box, Check, ExternalLink, Globe2, Image, LoaderCircle, QrCode, Rotate3D, ScanLine, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Box, Check, ExternalLink, Globe2, Image, LoaderCircle, QrCode, Rotate3D, ScanLine, ShieldCheck, Sparkles, Upload } from 'lucide-react';
 import PrototypeProductTwin from './PrototypeProductTwin';
+import './prototype-import.css';
 
 const API_BASE=import.meta.env.VITE_API_BASE_URL||'';
 const STAGES=['Connecting to website','Reading product structure','Extracting catalog data','Preparing Ashes drafts'];
@@ -12,9 +13,12 @@ const SHOWCASE=[
 
 function money(value,currency='USD'){if(value===null||value===undefined)return 'Price unavailable';try{return new Intl.NumberFormat('en',{style:'currency',currency}).format(value)}catch{return `${currency} ${value}`}}
 function safeRemoteAsset(value){if(!value)return null;try{const parsed=new URL(value);return ['http:','https:'].includes(parsed.protocol)?parsed.toString():null}catch{return null}}
+function baseName(value=''){return String(value).replace(/\.[a-z0-9]{2,5}$/i,'').replace(/[-_]+/g,' ').trim().slice(0,120)}
 
 export default function PrototypeStudio({onBack,onOpenProduct}){
  const[url,setUrl]=useState(''),[status,setStatus]=useState('idle'),[stage,setStage]=useState(0),[result,setResult]=useState(null),[error,setError]=useState(''),[selected,setSelected]=useState(0),[twinProduct,setTwinProduct]=useState(null);
+ const[imageUrl,setImageUrl]=useState(''),[imageData,setImageData]=useState(''),[imageFileName,setImageFileName]=useState(''),[imageProductName,setImageProductName]=useState('');
+ const[imageStatus,setImageStatus]=useState('idle'),[imageProgress,setImageProgress]=useState(0),[imageStage,setImageStage]=useState(''),[imageError,setImageError]=useState('');
  const timers=useRef([]);
  const products=result?.products||[];
  const merchant=useMemo(()=>result?.merchant||'Your imported store',[result]);
@@ -37,18 +41,57 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
   setUrl(normalized);setStatus('scanning');setStage(0);
   [650,1350,2100].forEach((ms,i)=>timers.current.push(setTimeout(()=>setStage(i+1),ms)));
   try{
-   const requestScan=path=>fetch(`${API_BASE}${path}`,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','Cache-Control':'no-cache'},body:JSON.stringify({url:normalized,max_pages:8})});
-   let response=await requestScan('/api/prototype/scan');
-   let body=await response.json().catch(()=>({}));
-   if(response.status===422&&body.code==='CATALOG_UNREADABLE'){
-    setStage(2);
-    response=await requestScan('/api/prototype/scan-spa');
-    body=await response.json().catch(()=>({}));
-   }
-   if(!response.ok)throw new Error(typeof body.detail==='string'?body.detail:'This website blocked the live catalog scan.');
+   const response=await fetch(`${API_BASE}/api/prototype/scan`,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','Cache-Control':'no-cache'},body:JSON.stringify({url:normalized,max_pages:8})});
+   const body=await response.json().catch(()=>({}));
+   if(!response.ok)throw new Error(typeof body.detail==='string'?body.detail:'This website did not expose usable public product data.');
    resetTimers();setStage(3);setResult(body);setStatus('ready');
   }catch(err){resetTimers();setStatus('idle');setStage(0);setResult(null);setError(err.message||'Live scanning is unavailable right now.');}
  };
+
+ const chooseImage=event=>{
+  const file=event.target.files?.[0];
+  setImageError('');setImageData('');setImageFileName('');
+  if(!file)return;
+  if(!['image/png','image/jpeg','image/webp'].includes(file.type))return setImageError('Choose a PNG, JPEG, or WebP product image.');
+  if(file.size>3_000_000)return setImageError('Keep direct uploads under 3 MB. You can also paste a public HTTPS image URL.');
+  const reader=new FileReader();
+  reader.onload=()=>{setImageData(String(reader.result||''));setImageFileName(file.name);if(!imageProductName)setImageProductName(baseName(file.name)||'Uploaded product');};
+  reader.onerror=()=>setImageError('The selected image could not be read.');
+  reader.readAsDataURL(file);
+ };
+
+ const generateImage3d=async e=>{
+  e?.preventDefault();if(imageStatus==='working')return;
+  setImageError('');
+  const payload={product_name:(imageProductName.trim()||baseName(imageFileName)||'Uploaded product').slice(0,180)};
+  let remoteImage='';
+  if(imageData)payload.image_data_url=imageData;
+  else{
+   try{const parsed=new URL(imageUrl.trim());if(parsed.protocol!=='https:')throw new Error();remoteImage=parsed.toString();payload.image_url=remoteImage;}catch{return setImageError('Upload an image or paste a public HTTPS image URL.');}
+  }
+  setImageStatus('working');setImageProgress(1);setImageStage('QUEUED');
+  try{
+   const started=await fetch(`${API_BASE}/api/prototype/generate-3d`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+   const startBody=await started.json().catch(()=>({}));
+   if(!started.ok)throw new Error(startBody.detail||'Could not start image-to-3D generation.');
+   for(let attempt=0;attempt<240;attempt+=1){
+    await new Promise(resolve=>setTimeout(resolve,5000));
+    const check=await fetch(`${API_BASE}/api/prototype/generate-3d?id=${encodeURIComponent(startBody.task_id)}`,{cache:'no-store'});
+    const task=await check.json().catch(()=>({}));
+    if(!check.ok)throw new Error(task.detail||'Could not check the 3D generation.');
+    const progress=Math.max(1,Math.min(99,Number(task.progress||attempt+2)));
+    setImageProgress(progress);setImageStage(task.stage||'RECONSTRUCTING_3D');
+    if(['SUCCEEDED','COMPLETED'].includes(task.status)&&task.model_url){
+     setImageProgress(100);setImageStage('COMPLETED');setImageStatus('done');
+     setTwinProduct({name:payload.product_name,image_url:remoteImage||null,model_url:task.model_url,price:null,currency:'USD',description:imageData?'Generated directly from an uploaded product image with Ashes TRELLIS.':'Generated directly from a public product image URL with Ashes TRELLIS.',readiness:'real-3d'});
+     return;
+    }
+    if(['FAILED','CANCELED','EXPIRED'].includes(task.status))throw new Error(task.error||`3D generation ${String(task.status).toLowerCase()}.`);
+   }
+   throw new Error('3D generation is still running after 20 minutes.');
+  }catch(err){setImageStatus('error');setImageError(err.message||'Image-to-3D generation failed.');}
+ };
+
  const restart=()=>{resetTimers();window.history.replaceState({},'','/prototype');setStatus('idle');setResult(null);setError('');setStage(0);setSelected(0);setTwinProduct(null)};
  const item=products[selected];
 
@@ -57,34 +100,57 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
   <nav className="prototype-nav"><button onClick={onBack}><ArrowLeft size={17}/> Back to Ashes</button><a className="brand" href="/"><span>ASHES</span><b>AI</b></a><span className="prototype-live"><i/> PROTOTYPE 01</span></nav>
 
   <section className="prototype-hero">
-   <div className="prototype-kicker"><Sparkles size={15}/> WEBSITE → 3D COMMERCE</div>
-   <h1>PASTE A STORE.<br/><span>WATCH IT BECOME AN EXPERIENCE.</span></h1>
-   <p>A public Ashes AI prototype: scan a merchant website, extract its products, prepare the 3D layer and create scannable product experiences.</p>
-   {status==='idle'&&<form className="prototype-url-form" onSubmit={scan}>
-    <Globe2 size={20}/><input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://merchant-website.com" aria-label="Merchant website URL"/>
-    <button type="submit">Build catalog <ArrowRight size={17}/></button>
-   </form>}
+   <div className="prototype-kicker"><Sparkles size={15}/> WEBSITE OR IMAGE → REAL 3D</div>
+   <h1>PASTE A STORE.<br/><span>OR DROP A PRODUCT IMAGE.</span></h1>
+   <p>Ashes tries structured catalog data, client-rendered data, then public visual product candidates. If a site still blocks access, upload the product image directly and generate its GLB.</p>
+   {status==='idle'&&<div className="prototype-entry-grid">
+    <div className="prototype-entry-card">
+     <div className="prototype-entry-card-head"><Globe2/><div><strong>Import from any public website</strong><span>Structured catalog → SPA bundles → visual product candidates.</span></div></div>
+     <form className="prototype-url-form" onSubmit={scan}>
+      <Globe2 size={20}/><input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://merchant-website.com" aria-label="Merchant website URL"/>
+      <button type="submit">Read website <ArrowRight size={17}/></button>
+     </form>
+     {error&&<div className="prototype-error">{error}</div>}
+    </div>
+
+    <div className="prototype-entry-card">
+     <div className="prototype-entry-card-head"><Image/><div><strong>Image → 3D</strong><span>Upload one product photo or paste its direct HTTPS image URL.</span></div></div>
+     <form className="prototype-image-source" onSubmit={generateImage3d}>
+      <div className="prototype-upload-row">
+       <label className="prototype-upload-label"><Upload size={17}/> Choose product image<input type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseImage}/></label>
+       <span className="prototype-upload-name">{imageFileName||'PNG · JPG · WEBP'}</span>
+      </div>
+      {imageData&&<div className="prototype-image-preview"><img src={imageData} alt="Selected product"/></div>}
+      <div className="prototype-or">OR</div>
+      <input className="prototype-image-url" value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://cdn.store.com/product.webp" aria-label="Public product image URL"/>
+      <input className="prototype-product-name" value={imageProductName} onChange={e=>setImageProductName(e.target.value)} placeholder="Product name (optional)" aria-label="Product name"/>
+      <button className="prototype-image-generate" type="submit" disabled={imageStatus==='working'}>{imageStatus==='working'?<LoaderCircle className="spin-icon" size={17}/>:<Sparkles size={17}/>} {imageStatus==='working'?`Generating 3D · ${imageProgress}%`:'Generate real 3D'}</button>
+      {imageStatus==='working'&&<div className="prototype-image-progress"><div><i style={{width:`${imageProgress}%`}}/></div><span>{String(imageStage||'RECONSTRUCTING_3D').replaceAll('_',' ')}</span></div>}
+      {imageError&&<div className="prototype-entry-error">{imageError}</div>}
+     </form>
+    </div>
+   </div>}
    {status==='idle'&&<button className="instant-showcase" onClick={()=>{window.history.replaceState({},'','/prototype?demo=1');useShowcase('Instant showcase selected.')}}><Sparkles size={14}/> Skip the scan — open instant showcase <ArrowRight size={14}/></button>}
-   {status==='idle'&&<div className="prototype-trust"><span><ShieldCheck size={14}/> Read-only preview</span><span><ScanLine size={14}/> Public URLs only</span><span><Box size={14}/> Nothing published automatically</span></div>}
-   {error&&status==='idle'&&<div className="prototype-error">{error}</div>}
+   {status==='idle'&&<div className="prototype-trust"><span><ShieldCheck size={14}/> Read-only website scan</span><span><ScanLine size={14}/> Public data only</span><span><Box size={14}/> Nothing published automatically</span></div>}
   </section>
 
   {status==='scanning'&&<section className="prototype-scanner">
    <div className="scanner-orbit"><Globe2/><i/><i/><i/></div>
-   <div><span className="prototype-kicker">ASHES VISION ENGINE</span><h2>{STAGES[stage]}</h2><p>{url}</p>
+   <div><span className="prototype-kicker">ASHES UNIVERSAL IMPORTER</span><h2>{STAGES[stage]}</h2><p>{url}</p>
     <div className="stage-list">{STAGES.map((label,index)=><div className={index<stage?'done':index===stage?'active':''} key={label}><i>{index<stage?<Check size={13}/>:index+1}</i><span>{label}</span>{index===stage&&<LoaderCircle className="spin-icon" size={15}/>}</div>)}</div>
    </div>
   </section>}
 
   {status==='ready'&&item&&<section className="prototype-results">
-   <header><div><span className="prototype-kicker">{result.mode==='live'?'LIVE CATALOG EXTRACT':'CURATED FALLBACK'}</span><h2>{merchant}</h2><p><b>{products.length} PRODUCTS FOUND</b> — select any item below to review it.</p></div><div className="result-actions"><button onClick={restart}>Scan another website</button><span><Check size={14}/> Extraction complete</span></div></header>
+   <header><div><span className="prototype-kicker">{result.scan_method==='visual-candidate'?'PUBLIC VISUAL CANDIDATES':result.mode==='live'?'LIVE CATALOG EXTRACT':'CURATED FALLBACK'}</span><h2>{merchant}</h2><p><b>{products.length} PRODUCTS FOUND</b> — select any item below to review it.</p></div><div className="result-actions"><button onClick={restart}>Scan another website</button><span><Check size={14}/> Extraction complete</span></div></header>
    {result.mode==='showcase'&&<div className="showcase-notice"><ShieldCheck size={17}/><div><strong>Showcase mode</strong><span>{error} The flow continues with clearly labelled sample products so the demo never dead-ends.</span></div></div>}
+   {result.scan_method==='visual-candidate'&&<div className="showcase-notice prototype-visual-notice"><Image size={17}/><div><strong>Visual fallback used</strong><span>{result.notice||'These are public image candidates rather than verified structured products. Review the image before generating 3D.'}</span></div></div>}
    <div className="prototype-workspace">
-    <aside className="prototype-catalog"><div className="catalog-title"><span>{products.length} PRODUCTS FOUND · SELECT ANY</span><b>{products.length}</b></div>{products.map((product,index)=><button className={selected===index?'active':''} onClick={()=>setSelected(index)} key={product.source_url||product.name}><img src={product.image_url} alt=""/><div><strong>{product.name}</strong><span>{money(product.price,product.currency)}</span></div><i>{String(index+1).padStart(2,'0')}</i></button>)}</aside>
+    <aside className="prototype-catalog"><div className="catalog-title"><span>{products.length} PRODUCTS FOUND · SELECT ANY</span><b>{products.length}</b></div>{products.map((product,index)=><button className={selected===index?'active':''} onClick={()=>setSelected(index)} key={`${product.image_url||product.source_url||product.name}-${index}`}>{product.image_url?<img src={product.image_url} alt=""/>:<div className="image-empty"><Image/></div>}<div><strong>{product.name}</strong><span>{money(product.price,product.currency)}</span></div><i>{String(index+1).padStart(2,'0')}</i></button>)}</aside>
     <article className="prototype-product-stage">
      <div className="prototype-product-image"><div className="image-scan"/>{item.image_url?<img src={item.image_url} alt={item.name}/>:<div className="image-empty"><Image/><span>Image required</span></div>}<span className="draft-chip">DRAFT · NOT PUBLISHED</span></div>
      <div className="prototype-product-copy"><span>PRODUCT {String(selected+1).padStart(2,'0')}</span><h3>{item.name}</h3><strong>{money(item.price,item.currency)}</strong><p>{item.description||'Product information extracted from the merchant website and prepared for review.'}</p>
-      <div className="readiness-row"><div><Check size={15}/><span><b>Catalog data</b>Ready</span></div><div><Rotate3D size={15}/><span><b>3D asset</b>{item.model_url?'Real GLB ready':item.image_url?'Photo-based preview only':'Product photo required'}</span></div><div><QrCode size={15}/><span><b>Smart QR</b>Generate inside</span></div></div>
+      <div className="readiness-row"><div><Check size={15}/><span><b>Catalog data</b>{result.scan_method==='visual-candidate'?'Visual candidate':'Ready'}</span></div><div><Rotate3D size={15}/><span><b>3D asset</b>{item.model_url?'Real GLB ready':item.image_url?'Image ready for TRELLIS':'Product photo required'}</span></div><div><QrCode size={15}/><span><b>Smart QR</b>Generate inside</span></div></div>
       <div className="prototype-product-actions"><button className="primary-btn" disabled={!item.model_url&&!item.image_url} onClick={()=>setTwinProduct(item)}>{item.model_url?'Open real 3D model':item.image_url?'Generate real 3D product':'3D needs a product photo'} <ArrowRight size={16}/></button>{item.source_url&&<a href={item.source_url} target="_blank" rel="noreferrer">Source <ExternalLink size={14}/></a>}</div>
      </div>
     </article>
