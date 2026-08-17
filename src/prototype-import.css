@@ -1,0 +1,111 @@
+.prototype-entry-grid{
+  width:min(1120px,calc(100% - 32px));
+  margin:30px auto 0;
+  display:grid;
+  grid-template-columns:1.08fr .92fr;
+  gap:16px;
+  text-align:left;
+}
+
+.prototype-entry-card{
+  position:relative;
+  min-width:0;
+  padding:20px;
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:22px;
+  background:linear-gradient(145deg,rgba(255,255,255,.055),rgba(255,255,255,.018));
+  box-shadow:0 20px 70px rgba(0,0,0,.18);
+  overflow:hidden;
+}
+
+.prototype-entry-card::before{
+  content:"";
+  position:absolute;
+  inset:0 0 auto;
+  height:1px;
+  background:linear-gradient(90deg,transparent,rgba(88,230,255,.5),rgba(174,93,255,.35),transparent);
+}
+
+.prototype-entry-card-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px}
+.prototype-entry-card-head>svg{width:22px;height:22px;color:#75eaff;flex:0 0 auto;margin-top:2px}
+.prototype-entry-card-head strong{display:block;color:#fff;font-size:.94rem;letter-spacing:.02em}
+.prototype-entry-card-head span{display:block;margin-top:4px;color:#928a99;font-size:.72rem;line-height:1.45}
+
+.prototype-entry-card .prototype-url-form{width:100%;margin:0}
+.prototype-entry-card .prototype-url-form input{min-width:0}
+
+.prototype-image-source{display:grid;gap:10px}
+.prototype-upload-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:stretch}
+.prototype-upload-label{
+  min-height:54px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:9px;
+  padding:0 16px;
+  border:1px dashed rgba(88,230,255,.32);
+  border-radius:14px;
+  background:rgba(88,230,255,.045);
+  color:#dffcff;
+  font-size:.76rem;
+  font-weight:700;
+  cursor:pointer;
+}
+.prototype-upload-label:hover{border-color:rgba(88,230,255,.65);background:rgba(88,230,255,.075)}
+.prototype-upload-label input{display:none}
+.prototype-upload-name{display:flex;align-items:center;padding:0 12px;border:1px solid rgba(255,255,255,.08);border-radius:14px;color:#8f8797;font-size:.68rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.prototype-image-preview{height:128px;border-radius:14px;overflow:hidden;border:1px solid rgba(255,255,255,.08);background:#09090b;display:flex;align-items:center;justify-content:center}
+.prototype-image-preview img{width:100%;height:100%;object-fit:contain}
+
+.prototype-or{display:flex;align-items:center;gap:10px;color:#6f6875;font-size:.6rem;letter-spacing:.16em}
+.prototype-or::before,.prototype-or::after{content:"";height:1px;background:rgba(255,255,255,.08);flex:1}
+
+.prototype-image-url,.prototype-product-name{
+  width:100%;
+  min-height:48px;
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:13px;
+  background:rgba(0,0,0,.22);
+  color:#fff;
+  outline:none;
+  padding:0 13px;
+  font:inherit;
+  font-size:.76rem;
+}
+.prototype-image-url:focus,.prototype-product-name:focus{border-color:rgba(88,230,255,.48);box-shadow:0 0 0 3px rgba(88,230,255,.05)}
+
+.prototype-image-generate{
+  min-height:50px;
+  border:0;
+  border-radius:14px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:9px;
+  background:linear-gradient(110deg,#65e9ff,#9f62ff);
+  color:#08090b;
+  font-weight:900;
+  font-size:.75rem;
+  cursor:pointer;
+}
+.prototype-image-generate:disabled{opacity:.58;cursor:not-allowed}
+
+.prototype-image-progress{display:grid;gap:7px}
+.prototype-image-progress>div{height:5px;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden}
+.prototype-image-progress>div i{display:block;height:100%;background:linear-gradient(90deg,#62e9ff,#a35cff);transition:width .3s ease}
+.prototype-image-progress span{color:#9e96a5;font-size:.65rem;text-transform:uppercase;letter-spacing:.08em}
+.prototype-entry-error{padding:9px 11px;border:1px solid rgba(255,92,118,.22);border-radius:11px;background:rgba(255,92,118,.055);color:#ff9aaa;font-size:.68rem;line-height:1.45}
+
+.prototype-visual-notice{margin:0 0 16px}
+
+@media(max-width:900px){
+  .prototype-entry-grid{grid-template-columns:1fr;width:min(720px,calc(100% - 26px))}
+}
+
+@media(max-width:560px){
+  .prototype-entry-grid{width:calc(100% - 20px);gap:12px}
+  .prototype-entry-card{padding:15px;border-radius:17px}
+  .prototype-upload-row{grid-template-columns:1fr}
+  .prototype-upload-name{max-width:none;min-height:38px;justify-content:center}
+}
