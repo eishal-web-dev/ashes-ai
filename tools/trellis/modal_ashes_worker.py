@@ -141,6 +141,7 @@ def _public_https(value: str) -> str:
 def _download_image(url: str, target: Path):
     import requests
     from PIL import Image
+
     safe_url = _public_https(url)
     with requests.get(safe_url, timeout=30, stream=True, headers={"User-Agent": "Ashes-TRELLIS-Modal/1.0"}) as response:
         response.raise_for_status()
@@ -161,6 +162,7 @@ def _download_image(url: str, target: Path):
 
 def _open_uploaded_image(raw: bytes, target: Path):
     from PIL import Image
+
     if not raw:
         raise ValueError("Empty product image")
     if len(raw) > MAX_IMAGE_BYTES:
@@ -175,6 +177,7 @@ def _get_pipeline():
     if _PIPELINE is None:
         sys.path.insert(0, TRELLIS_ROOT)
         from trellis.pipelines import TrellisImageTo3DPipeline
+
         _PIPELINE = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")
         _PIPELINE.cuda()
         try:
@@ -184,9 +187,57 @@ def _get_pipeline():
     return _PIPELINE
 
 
+def _validate_glb(output_path: Path) -> dict:
+    """Reject corrupt or empty GLBs before they are exposed as completed jobs."""
+    import numpy as np
+    import trimesh
+
+    raw = output_path.read_bytes()
+    if len(raw) < 20:
+        raise RuntimeError("TRELLIS exported a truncated GLB")
+    if raw[:4] != b"glTF":
+        raise RuntimeError("TRELLIS export is not a GLB binary")
+
+    version = int.from_bytes(raw[4:8], "little")
+    declared_length = int.from_bytes(raw[8:12], "little")
+    if version != 2:
+        raise RuntimeError(f"Unsupported GLB version {version}")
+    if declared_length != len(raw):
+        raise RuntimeError(f"GLB length mismatch: header={declared_length}, file={len(raw)}")
+
+    try:
+        loaded = trimesh.load(output_path, file_type="glb", force="scene", process=False)
+    except Exception as exc:
+        raise RuntimeError(f"GLB validation failed to reopen export: {exc}") from exc
+
+    geometries = list(getattr(loaded, "geometry", {}).values())
+    if not geometries:
+        raise RuntimeError("TRELLIS GLB contains no mesh geometry")
+
+    vertex_count = sum(len(getattr(mesh, "vertices", [])) for mesh in geometries)
+    face_count = sum(len(getattr(mesh, "faces", [])) for mesh in geometries)
+    if vertex_count < 100 or face_count < 50:
+        raise RuntimeError(f"TRELLIS GLB geometry is too small: {vertex_count} vertices, {face_count} faces")
+
+    bounds = getattr(loaded, "bounds", None)
+    if bounds is None or np.asarray(bounds).shape != (2, 3) or not np.isfinite(bounds).all():
+        raise RuntimeError("TRELLIS GLB has invalid scene bounds")
+    extents = np.asarray(bounds[1]) - np.asarray(bounds[0])
+    if np.max(extents) <= 1e-6:
+        raise RuntimeError("TRELLIS GLB geometry has zero-sized bounds")
+
+    return {
+        "size_bytes": len(raw),
+        "mesh_count": len(geometries),
+        "vertex_count": int(vertex_count),
+        "face_count": int(face_count),
+    }
+
+
 def _run_reconstruction(images: list, output_path: Path) -> dict:
     import torch
     from trellis.utils import postprocessing_utils
+
     pipeline = _get_pipeline()
     steps = max(12, min(32, int(os.getenv("ASHES_TRELLIS_STEPS", str(DEFAULT_STEPS)))))
     if len(images) >= 3:
@@ -203,10 +254,21 @@ def _run_reconstruction(images: list, output_path: Path) -> dict:
             slat_sampler_params={"steps": steps, "cfg_strength": 3.0},
         )
         mode = "TRELLIS_SINGLE_IMAGE"
-    glb = postprocessing_utils.to_glb(outputs["gaussian"][0], outputs["mesh"][0], simplify=0.70, texture_size=2048)
-    glb.export(output_path)
+
+    glb_scene = postprocessing_utils.to_glb(
+        outputs["gaussian"][0],
+        outputs["mesh"][0],
+        simplify=0.70,
+        texture_size=2048,
+    )
+    binary = glb_scene.export(file_type="glb")
+    if not isinstance(binary, (bytes, bytearray)):
+        raise RuntimeError("TRELLIS did not return binary GLB bytes")
+    output_path.write_bytes(bytes(binary))
+
+    validation = _validate_glb(output_path)
     torch.cuda.empty_cache()
-    return {"mode": mode, "views": len(images), "steps": steps, "size_bytes": output_path.stat().st_size}
+    return {"mode": mode, "views": len(images), "steps": steps, **validation}
 
 
 @app.function(
@@ -236,11 +298,17 @@ def generate_task(payload: dict, raw_image: bytes | None = None) -> dict:
                     raise ValueError("image_url is required when fewer than three views are supplied")
                 urls = [image_url]
             images = [_download_image(url, work / f"view_{index}.img") for index, url in enumerate(urls, start=1)]
+
         result = _run_reconstruction(images, output_path)
-        if not output_path.is_file() or output_path.stat().st_size == 0:
-            raise RuntimeError("TRELLIS produced an empty GLB")
         model_volume.commit()
-        return {"model_id": model_id, "product_name": str(payload.get("product_name") or "Product")[:200], **result}
+        return {
+            "model_id": model_id,
+            "product_name": str(payload.get("product_name") or "Product")[:200],
+            **result,
+        }
+    except Exception:
+        output_path.unlink(missing_ok=True)
+        raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -259,10 +327,18 @@ def web():
     import re
     import fastapi
     from fastapi import Header, HTTPException, Request
+    from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse
     from pydantic import BaseModel
 
-    api = fastapi.FastAPI(title="Ashes Modal TRELLIS Worker", version="1.0")
+    api = fastapi.FastAPI(title="Ashes Modal TRELLIS Worker", version="1.1")
+    api.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+        expose_headers=["Content-Length", "Content-Range", "Accept-Ranges"],
+    )
 
     class GenerationRequest(BaseModel):
         image_url: str
@@ -285,7 +361,14 @@ def web():
 
     @api.get("/health")
     def health():
-        return {"status": "ok", "provider": "modal", "gpu": "T4", "generation": "scale-to-zero", "trellis_commit": TRELLIS_COMMIT}
+        return {
+            "status": "ok",
+            "provider": "modal",
+            "gpu": "T4",
+            "generation": "scale-to-zero",
+            "trellis_commit": TRELLIS_COMMIT,
+            "glb_validation": "enabled",
+        }
 
     @api.post("/v1/product-to-3d", status_code=202)
     def start_from_urls(payload: GenerationRequest, authorization: str | None = Header(default=None)):
@@ -318,6 +401,7 @@ def web():
                 return {"task_id": task_id, "status": "PROCESSING", "stage": "RECONSTRUCTING_3D", "progress": 50}
         except Exception as exc:
             return {"task_id": task_id, "status": "FAILED", "stage": "FAILED", "progress": 100, "error": str(exc)[:500]}
+
         return {
             "task_id": task_id,
             "status": "COMPLETED",
@@ -325,6 +409,10 @@ def web():
             "progress": 100,
             "views": result.get("views", 1),
             "steps": result.get("steps"),
+            "size_bytes": result.get("size_bytes"),
+            "mesh_count": result.get("mesh_count"),
+            "vertex_count": result.get("vertex_count"),
+            "face_count": result.get("face_count"),
             "model_url": f"{base_url(request)}/v1/files/{result['model_id']}/model.glb",
         }
 
@@ -337,6 +425,19 @@ def web():
         path = Path(MODEL_ROOT) / f"{model_id}.glb"
         if not path.is_file():
             raise HTTPException(404, "Model not found")
-        return FileResponse(path, media_type="model/gltf-binary", filename=f"ashes-{model_id}.glb")
+
+        raw = path.read_bytes()
+        if len(raw) < 20 or raw[:4] != b"glTF" or int.from_bytes(raw[8:12], "little") != len(raw):
+            raise HTTPException(500, "Stored GLB failed integrity validation")
+
+        return FileResponse(
+            path,
+            media_type="model/gltf-binary",
+            headers={
+                "Content-Disposition": f'inline; filename="ashes-{model_id}.glb"',
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
 
     return api
