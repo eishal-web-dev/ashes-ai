@@ -36,12 +36,17 @@ export default function PrototypeStudio({onBack,onOpenProduct}){
   try{new URL(normalized)}catch{return setError('Enter a valid website URL, for example https://store.com');}
   setUrl(normalized);setStatus('scanning');setStage(0);
   [650,1350,2100].forEach((ms,i)=>timers.current.push(setTimeout(()=>setStage(i+1),ms)));
- try{
-   const requestScan=()=>fetch(`${API_BASE}/api/prototype/scan`,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','Cache-Control':'no-cache'},body:JSON.stringify({url:normalized,max_pages:8})});
-   let response=await requestScan();
-   if(response.status===422)response=await requestScan();
-   if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(typeof body.detail==='string'?body.detail:'This website blocked the live catalog scan.');}
-   const data=await response.json();resetTimers();setStage(3);setResult(data);setStatus('ready');
+  try{
+   const requestScan=path=>fetch(`${API_BASE}${path}`,{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json','Cache-Control':'no-cache'},body:JSON.stringify({url:normalized,max_pages:8})});
+   let response=await requestScan('/api/prototype/scan');
+   let body=await response.json().catch(()=>({}));
+   if(response.status===422&&body.code==='CATALOG_UNREADABLE'){
+    setStage(2);
+    response=await requestScan('/api/prototype/scan-spa');
+    body=await response.json().catch(()=>({}));
+   }
+   if(!response.ok)throw new Error(typeof body.detail==='string'?body.detail:'This website blocked the live catalog scan.');
+   resetTimers();setStage(3);setResult(body);setStatus('ready');
   }catch(err){resetTimers();setStatus('idle');setStage(0);setResult(null);setError(err.message||'Live scanning is unavailable right now.');}
  };
  const restart=()=>{resetTimers();window.history.replaceState({},'','/prototype');setStatus('idle');setResult(null);setError('');setStage(0);setSelected(0);setTwinProduct(null)};
