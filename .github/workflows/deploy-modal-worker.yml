@@ -1,0 +1,60 @@
+name: Deploy Ashes Modal Worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/trellis/modal_ashes_worker.py'
+      - '.github/workflows/deploy-modal-worker.yml'
+
+concurrency:
+  group: ashes-modal-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy TRELLIS worker to Modal
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      ASHES_TRELLIS_WORKER_TOKEN: ${{ secrets.ASHES_TRELLIS_WORKER_TOKEN }}
+
+    steps:
+      - name: Check Modal credentials
+        id: modal_credentials
+        shell: bash
+        run: |
+          if [ -n "$MODAL_TOKEN_ID" ] && [ -n "$MODAL_TOKEN_SECRET" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Modal credentials are configured."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Modal credentials are not configured yet; deployment is being skipped safely."
+          fi
+
+      - name: Checkout repository
+        if: steps.modal_credentials.outputs.ready == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.modal_credentials.outputs.ready == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Modal CLI
+        if: steps.modal_credentials.outputs.ready == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install modal
+
+      - name: Verify Modal token
+        if: steps.modal_credentials.outputs.ready == 'true'
+        run: modal token info
+
+      - name: Deploy Ashes TRELLIS worker
+        if: steps.modal_credentials.outputs.ready == 'true'
+        run: modal deploy tools/trellis/modal_ashes_worker.py --name ashes-trellis-worker
