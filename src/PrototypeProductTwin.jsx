@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ArrowLeft, Box, Check, Copy, Download, LoaderCircle, QrCode, Rotate3D, Share2, Sparkles } from 'lucide-react';
 import QRCode from 'qrcode';
+import './prototype-viewer-controls.css';
 
 function TwinGeometry({name}){
  const kind=(name||'').toLowerCase();
@@ -20,8 +21,10 @@ function TwinGeometry({name}){
 export default function PrototypeProductTwin({product,onClose}){
  const[copied,setCopied]=useState(false),[qrUrl,setQrUrl]=useState(''),[qrBusy,setQrBusy]=useState(false),[qrError,setQrError]=useState('');
  const[generatedModel,setGeneratedModel]=useState(''),[generationState,setGenerationState]=useState('idle'),[generationProgress,setGenerationProgress]=useState(0),[generationStage,setGenerationStage]=useState(''),[generatedViews,setGeneratedViews]=useState([]),[generationError,setGenerationError]=useState('');
+ const[viewerScale,setViewerScale]=useState(1),[viewerX,setViewerX]=useState(0),[viewerY,setViewerY]=useState(0),[viewerZ,setViewerZ]=useState(0),[viewerLight,setViewerLight]=useState(1),[viewerGrid,setViewerGrid]=useState(true);
  const assetModel=product.model_url||generatedModel;
  const shareUrl=useMemo(()=>{const u=new URL('/prototype',window.location.origin);u.searchParams.set('preview','1');u.searchParams.set('name',product.name||'Ashes product');if(product.image_url)u.searchParams.set('image',product.image_url);if(assetModel)u.searchParams.set('model',assetModel);if(product.price!=null)u.searchParams.set('price',String(product.price));u.searchParams.set('currency',product.currency||'USD');return u.toString()},[product,assetModel]);
+ const resetViewer=()=>{setViewerScale(1);setViewerX(0);setViewerY(0);setViewerZ(0);setViewerLight(1);setViewerGrid(true)};
  const generate3d=async()=>{
   if(!product.image_url||generationState==='working')return;
   setGenerationState('working');setGenerationProgress(1);setGenerationError('');
@@ -38,7 +41,7 @@ export default function PrototypeProductTwin({product,onClose}){
     if(['SUCCEEDED','COMPLETED'].includes(task.status)&&task.model_url){setGeneratedModel(task.model_url);setGenerationProgress(100);setGenerationState('done');return;}
     if(['FAILED','CANCELED','EXPIRED'].includes(task.status))throw new Error(task.error||`3D generation ${task.status.toLowerCase()}.`);
    }
-   throw new Error('3D generation is still running after 20 minutes. Check the Colab worker before retrying.');
+   throw new Error('3D generation is still running after 20 minutes. Check the 3D worker before retrying.');
   }catch(error){setGenerationState('error');setGenerationError(error.message||'3D generation failed.');}
  };
  const makeQr=async()=>{if(qrUrl)return;setQrBusy(true);setQrError('');try{const svg=await QRCode.toString(shareUrl,{type:'svg',errorCorrectionLevel:'M',margin:2,width:320,color:{dark:'#09090b',light:'#ffffff'}});setQrUrl(URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'})))}catch(e){setQrError(e.message||'QR generation failed.')}finally{setQrBusy(false)}};
@@ -48,14 +51,25 @@ export default function PrototypeProductTwin({product,onClose}){
   <div className="twin-shell">
    <header><button onClick={onClose}><ArrowLeft size={16}/> Catalog</button><span><i/> INTERACTIVE TWIN · LIVE</span></header>
    <div className="twin-layout">
-    <div className="twin-canvas">
+    <div className="twin-canvas twin-canvas-compact">
      <div className="twin-hud"><span><Sparkles size={13}/> {assetModel?'REAL PRODUCT 3D · GLB':generationState==='working'?'BUILDING PRODUCT GEOMETRY':'SOURCE PHOTO · NOT 3D'}</span>{assetModel&&<span><Rotate3D size={13}/> DRAG TO ROTATE</span>}</div>
-     {assetModel?<model-viewer src={assetModel} alt={`Interactive 3D model of ${product.name}`} camera-controls auto-rotate shadow-intensity="1" exposure="1" interaction-prompt="auto" style={{width:'100%',height:'100%',background:'#09090b'}}/>:product.image_url?<div className="twin-honest-source"><img src={product.image_url} alt={`Source photograph of ${product.name}`}/><span>{generationState==='working'?`${generationStage.replaceAll('_',' ').toLowerCase()} · ${generationProgress}%`:'SOURCE IMAGE — GENERATE 3D TO ROTATE THE PRODUCT'}</span></div>:<div className="image-empty"><Box/><span>No real 3D model or product photo available</span></div>}
-     <div className="twin-badge"><Box size={15}/><span><b>{assetModel?'Real 3D asset':'No fake 3D preview'}</b>{assetModel?(product.model_url?'Loaded from the merchant product page':'Four views reconstructed by Ashes TRELLIS into a GLB'):'The source remains a flat photo until the GPU pipeline returns actual geometry'}</span></div>
+     {assetModel?<div className={`twin-viewer-stage${viewerGrid?' grid-on':''}`}><model-viewer src={assetModel} alt={`Interactive 3D model of ${product.name}`} camera-controls auto-rotate shadow-intensity={String(Math.min(2.4,viewerLight))} exposure={String(viewerLight)} scale={`${viewerScale} ${viewerScale} ${viewerScale}`} camera-target={`${viewerX}m ${viewerY}m ${viewerZ}m`} interaction-prompt="auto" style={{width:'100%',height:'100%',background:'transparent'}}/></div>:product.image_url?<div className="twin-honest-source"><img src={product.image_url} alt={`Source photograph of ${product.name}`}/><span>{generationState==='working'?`${generationStage.replaceAll('_',' ').toLowerCase()} · ${generationProgress}%`:'SOURCE IMAGE — GENERATE 3D TO ROTATE THE PRODUCT'}</span></div>:<div className="image-empty"><Box/><span>No real 3D model or product photo available</span></div>}
+     <div className="twin-badge"><Box size={15}/><span><b>{assetModel?'Real 3D asset':'No fake 3D preview'}</b>{assetModel?(product.model_url?'Loaded from the merchant product page':'Reconstructed by Ashes TRELLIS into a GLB'):'The source remains a flat photo until the GPU pipeline returns actual geometry'}</span></div>
     </div>
     <aside className="twin-panel">
      <span className="prototype-kicker">PRODUCT EXPERIENCE 03</span><h2>{product.name}</h2><p>{product.description||'An interactive Ashes product twin prepared from the imported catalog.'}</p>
      {product.image_url&&<div className="twin-source"><img src={product.image_url} alt="Product reference"/><span><b>{product.image_source_url?'Reference image':'Source product'}</b>{product.image_source_url?'Third-party reference — not the restaurant’s actual dish':'Displayed directly; no fake reconstruction'}</span></div>}
+     {assetModel&&<div className="twin-viewer-controls">
+      <div className="twin-viewer-controls-head"><strong>3D VIEW CONTROLS</strong><button type="button" onClick={resetViewer}>Reset</button></div>
+      <label className="twin-control-wide"><span>Size <b>{viewerScale.toFixed(2)}×</b></span><input type="range" min="0.35" max="2.2" step="0.05" value={viewerScale} onChange={e=>setViewerScale(Number(e.target.value))}/></label>
+      <div className="twin-move-grid">
+       <label><span>Move X <b>{viewerX.toFixed(2)}</b></span><input type="range" min="-1.5" max="1.5" step="0.05" value={viewerX} onChange={e=>setViewerX(Number(e.target.value))}/></label>
+       <label><span>Move Y <b>{viewerY.toFixed(2)}</b></span><input type="range" min="-1.5" max="1.5" step="0.05" value={viewerY} onChange={e=>setViewerY(Number(e.target.value))}/></label>
+       <label><span>Move Z <b>{viewerZ.toFixed(2)}</b></span><input type="range" min="-1.5" max="1.5" step="0.05" value={viewerZ} onChange={e=>setViewerZ(Number(e.target.value))}/></label>
+      </div>
+      <label className="twin-control-wide"><span>Lighting <b>{viewerLight.toFixed(2)}</b></span><input type="range" min="0.35" max="2.5" step="0.05" value={viewerLight} onChange={e=>setViewerLight(Number(e.target.value))}/></label>
+      <label className="twin-grid-toggle"><input type="checkbox" checked={viewerGrid} onChange={e=>setViewerGrid(e.target.checked)}/><span>Show floor grid</span></label>
+     </div>}
      {!assetModel&&product.image_url&&<div className="twin-real3d">
       <button className="twin-generate" onClick={generate3d} disabled={generationState==='working'}>{generationState==='working'?<LoaderCircle className="spin-icon"/>:<Sparkles/>}{generationState==='working'?(`Generating real 3D… ${generationProgress}%`):generationState==='error'?'Retry real 3D generation':'Generate real 3D from this image'}</button>
       <small>Ashes TRELLIS reconstructs and textures a genuine GLB mesh. Multiple real views are used when the source provides them.</small>

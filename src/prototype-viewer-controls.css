@@ -1,0 +1,113 @@
+.twin-shell .twin-canvas.twin-canvas-compact{
+  height:min(56vh,520px);
+  min-height:400px;
+  max-height:520px;
+  align-self:start;
+  overflow:hidden;
+}
+
+.twin-viewer-stage{
+  position:relative;
+  width:100%;
+  height:100%;
+  overflow:hidden;
+  background:radial-gradient(circle at 50% 34%,rgba(88,230,255,.08),transparent 38%),linear-gradient(180deg,#0b0a0e 0%,#08090b 100%);
+}
+
+.twin-viewer-stage::before{
+  content:"";
+  position:absolute;
+  z-index:0;
+  left:-24%;
+  right:-24%;
+  bottom:-33%;
+  height:74%;
+  background-image:linear-gradient(rgba(88,230,255,.2) 1px,transparent 1px),linear-gradient(90deg,rgba(88,230,255,.2) 1px,transparent 1px);
+  background-size:34px 34px;
+  transform:perspective(520px) rotateX(62deg);
+  transform-origin:50% 100%;
+  opacity:0;
+  transition:opacity .2s ease;
+  pointer-events:none;
+}
+
+.twin-viewer-stage::after{
+  content:"";
+  position:absolute;
+  z-index:0;
+  left:15%;
+  right:15%;
+  bottom:2%;
+  height:16%;
+  border-radius:50%;
+  background:radial-gradient(ellipse,rgba(0,0,0,.5),transparent 70%);
+  pointer-events:none;
+}
+
+.twin-viewer-stage.grid-on::before{opacity:.38}
+.twin-viewer-stage model-viewer{position:relative;z-index:1;width:100%;height:100%;--poster-color:transparent}
+
+.twin-viewer-controls{
+  margin:16px 0;
+  padding:14px;
+  border:1px solid rgba(88,230,255,.16);
+  border-radius:16px;
+  background:linear-gradient(135deg,rgba(88,230,255,.045),rgba(157,77,255,.055));
+  display:grid;
+  gap:12px;
+}
+
+.twin-viewer-controls-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+}
+
+.twin-viewer-controls-head strong{
+  font-size:.64rem;
+  letter-spacing:.14em;
+  color:#c9f9ff;
+}
+
+.twin-viewer-controls-head button{
+  border:1px solid rgba(255,255,255,.1);
+  background:rgba(255,255,255,.035);
+  color:#d9d1df;
+  border-radius:999px;
+  padding:6px 10px;
+  font-size:.64rem;
+}
+
+.twin-viewer-controls label{display:grid;gap:6px}
+.twin-viewer-controls label>span{display:flex;justify-content:space-between;gap:8px;color:#a89daf;font-size:.64rem}
+.twin-viewer-controls label>span b{color:#fff;font-weight:700}
+.twin-viewer-controls input[type="range"]{width:100%;accent-color:#58e6ff;cursor:pointer}
+
+.twin-move-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:9px;
+}
+
+.twin-grid-toggle{
+  display:flex!important;
+  align-items:center;
+  justify-content:flex-start;
+  gap:8px!important;
+  width:max-content;
+  color:#c9c1d0;
+}
+
+.twin-grid-toggle input{accent-color:#58e6ff}
+.twin-grid-toggle span{display:block!important;color:#c9c1d0!important}
+
+@media(max-width:900px){
+  .twin-shell .twin-canvas.twin-canvas-compact{height:420px;min-height:340px;max-height:420px}
+  .twin-move-grid{grid-template-columns:1fr}
+}
+
+@media(max-width:560px){
+  .twin-shell .twin-canvas.twin-canvas-compact{height:350px;min-height:300px;max-height:350px}
+  .twin-viewer-controls{padding:12px}
+}
