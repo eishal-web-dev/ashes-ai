@@ -1,0 +1,47 @@
+name: Deploy Ashes Modal Worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/trellis/modal_ashes_worker.py'
+      - '.github/workflows/deploy-modal-worker.yml'
+
+concurrency:
+  group: ashes-modal-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy TRELLIS worker to Modal
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      ASHES_TRELLIS_WORKER_TOKEN: ${{ secrets.ASHES_TRELLIS_WORKER_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Modal CLI
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install modal
+
+      - name: Verify Modal credentials are configured
+        shell: bash
+        run: |
+          test -n "$MODAL_TOKEN_ID" || (echo 'Missing GitHub secret: MODAL_TOKEN_ID' && exit 1)
+          test -n "$MODAL_TOKEN_SECRET" || (echo 'Missing GitHub secret: MODAL_TOKEN_SECRET' && exit 1)
+          modal token info
+
+      - name: Deploy Ashes TRELLIS worker
+        run: modal deploy tools/trellis/modal_ashes_worker.py --name ashes-trellis-worker
