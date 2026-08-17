@@ -44,7 +44,10 @@ def _install_trellis_with_gpu() -> None:
                 "git clone --recurse-submodules https://github.com/microsoft/TRELLIS.git /opt/TRELLIS && "
                 f"cd /opt/TRELLIS && git checkout {TRELLIS_COMMIT} && "
                 "git submodule update --init --recursive && "
-                "source setup.sh --basic --xformers --diffoctreerast --spconv --mipgaussian --kaolin --nvdiffrast"
+                "source setup.sh --basic --xformers --diffoctreerast --spconv --mipgaussian --kaolin --nvdiffrast && "
+                "python -m pip install --no-cache-dir xformers==0.0.27.post2 --index-url https://download.pytorch.org/whl/cu121 && "
+                "python -m pip install --no-cache-dir kaolin==0.16.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.4.0_cu121.html && "
+                "python -c 'import kaolin, xformers; print(\"TRELLIS deps ready\", kaolin.__version__, xformers.__version__)'"
             ),
         ],
         check=True,
