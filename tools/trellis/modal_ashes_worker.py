@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import ipaddress
 import os
 import shutil
@@ -182,7 +180,6 @@ def _get_pipeline():
 
         _PIPELINE = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")
         _PIPELINE.cuda()
-        # Preserve the downloaded Hugging Face weights across cold starts.
         try:
             cache_volume.commit()
         except Exception:
@@ -257,8 +254,6 @@ def generate_task(payload: dict, raw_image: bytes | None = None) -> dict:
         else:
             image_url = str(payload.get("image_url") or "").strip()
             view_urls = [str(x).strip() for x in (payload.get("view_urls") or []) if str(x).strip()]
-            # Only use multidiffusion when the merchant/product page really provides
-            # at least three explicit views. Otherwise keep single-image inference.
             urls = list(dict.fromkeys(view_urls))[:4]
             if len(urls) < 3:
                 if not image_url:
