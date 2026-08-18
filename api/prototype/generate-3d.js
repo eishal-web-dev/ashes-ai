@@ -1,3 +1,4 @@
+// Railway-backed TRELLIS proxy. Keep GPU credentials on the FastAPI service only.
 const RAILWAY_API_BASE = 'https://courteous-learning-production-d31e.up.railway.app';
 
 function send(res, status, body) {
