@@ -1,6 +1,6 @@
 name = "Ashes"
 client_id = "c32e874c004cd9ea236c6c4af326f03a"
-application_url = "https://ashes-ai.vercel.app/api/shopify/auth"
+application_url = "https://ashes-ai.vercel.app/api/shopify/app"
 embedded = true
 
 [access_scopes]
