@@ -33,7 +33,7 @@ export default function handler(req, res) {
     .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
     .card{padding:14px;display:grid;grid-template-columns:112px 1fr;gap:14px;min-height:140px}.img{width:112px;height:112px;border-radius:14px;background:#181818;display:flex;align-items:center;justify-content:center;overflow:hidden}.img img{width:100%;height:100%;object-fit:cover}.img span{color:#555;font-size:12px}
     .meta h3{margin:4px 0 6px;font-size:18px}.meta p{margin:0 0 12px;color:#999;font-size:13px}.actions{display:flex;gap:8px;flex-wrap:wrap}.state{font-size:12px;color:#a8a8a8;margin-top:10px;min-height:18px}.ok{color:#75e6a4}.err{color:#ff8f8f}
-    .empty{padding:40px;text-align:center;color:#888;background:#111;border:1px dashed #333;border-radius:18px}
+    .empty{padding:40px;text-align:center;color:#888;background:#111;border:1px dashed #333;border-radius:18px}.empty strong{display:block;color:#fff;margin-bottom:8px}.hint{display:block;margin-top:10px;color:#aaa;font-size:13px;line-height:1.5}
     @media(max-width:820px){.status{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
@@ -63,20 +63,37 @@ export default function handler(req, res) {
 
     function escapeHtml(v){return String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[c]));}
     function productImage(p){return p?.featuredMedia?.preview?.image?.url||'';}
+    function readable(v){
+      if(v==null)return '';
+      if(typeof v==='string')return v;
+      if(Array.isArray(v))return v.map(x=>readable(x)).filter(Boolean).join(' ');
+      if(typeof v==='object')return v.message||v.error_description||v.error||JSON.stringify(v);
+      return String(v);
+    }
 
     async function loadProducts(){
       productsEl.innerHTML='<div class="empty">Loading Shopify products…</div>';
-      connEl.textContent='Checking…';
+      connEl.textContent='Checking…'; connEl.className='';
+      countEl.textContent='—';
       try{
         const r=await fetch('/api/shopify/products',{cache:'no-store'});
         const data=await r.json();
-        if(!r.ok||!data.connected) throw new Error(data.detail||data.error||'Could not connect to Shopify');
+        if(!r.ok||!data.connected){
+          const msg=readable(data.error)||'Could not connect to Shopify';
+          const detail=readable(data.detail);
+          const action=readable(data.action);
+          throw {msg,detail,action,scopes:data.granted_scopes};
+        }
         connEl.textContent='Connected'; connEl.className='ok';
         countEl.textContent=String(data.products?.length||0);
         render(data.products||[]);
       }catch(e){
         connEl.textContent='Needs attention'; connEl.className='err';
-        productsEl.innerHTML='<div class="empty err">'+escapeHtml(e.message)+'</div>';
+        const msg=e?.msg||e?.message||'Shopify connection failed';
+        const detail=e?.detail||'';
+        const action=e?.action||'';
+        const scopes=e?.scopes?'<span class="hint">Granted scopes: '+escapeHtml(e.scopes)+'</span>':'';
+        productsEl.innerHTML='<div class="empty err"><strong>'+escapeHtml(msg)+'</strong>'+escapeHtml(detail)+(action?'<span class="hint">'+escapeHtml(action)+'</span>':'')+scopes+'</div>';
       }
     }
 
@@ -101,7 +118,7 @@ export default function handler(req, res) {
       try{
         const r=await fetch('/api/prototype/generate-3d',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({product_name:product.title,image_url:image})});
         const data=await r.json();
-        if(!r.ok) throw new Error(data.detail||data.error||'Generation could not start');
+        if(!r.ok) throw new Error(readable(data.detail)||readable(data.error)||'Generation could not start');
         state.textContent='Generation queued: '+data.task_id;
         await poll(data.task_id,state,btn);
       }catch(e){state.textContent=e.message;state.className='state err';engineEl.textContent='Needs attention';btn.disabled=false;}
@@ -112,7 +129,7 @@ export default function handler(req, res) {
         await new Promise(r=>setTimeout(r,2500));
         const r=await fetch('/api/prototype/generate-3d?id='+encodeURIComponent(id),{cache:'no-store'});
         const data=await r.json();
-        if(!r.ok) throw new Error(data.detail||'Could not read generation status');
+        if(!r.ok) throw new Error(readable(data.detail)||'Could not read generation status');
         const pct=Math.round(Number(data.progress||0)*100);
         state.textContent=(data.stage||data.status||'PROCESSING')+(pct?' · '+pct+'%':'');
         if(data.status==='SUCCEEDED'||data.status==='COMPLETED'){
