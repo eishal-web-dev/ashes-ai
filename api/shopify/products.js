@@ -68,9 +68,18 @@ export default async function handler(req, res) {
 
     const graphData = await graphResponse.json().catch(() => ({}));
     if (!graphResponse.ok || graphData.errors) {
-      return send(res, graphResponse.status || 502, {
-        error: 'Shopify GraphQL query failed.',
-        detail: graphData.errors || graphData,
+      const messages = Array.isArray(graphData.errors)
+        ? graphData.errors.map((e) => e?.message).filter(Boolean)
+        : [];
+      const scopeDenied = messages.some((m) => /access denied for products/i.test(m));
+
+      return send(res, graphResponse.ok ? 403 : graphResponse.status || 502, {
+        error: scopeDenied ? 'Product access has not been granted to Ashes AI yet.' : 'Shopify GraphQL query failed.',
+        detail: messages.length ? messages.join(' ') : graphData.errors || graphData,
+        granted_scopes: tokenData.scope || null,
+        action: scopeDenied
+          ? 'Open Ashes AI from Shopify Admin and approve the updated read_products/write_products permissions, or reinstall/update the app grant.'
+          : null,
       });
     }
 
