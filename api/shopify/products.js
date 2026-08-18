@@ -1,4 +1,4 @@
-const RAILWAY_API_BASE = (process.env.ASHES_RAILWAY_API_BASE || 'https://ashes-ai-production.up.railway.app').replace(/\/$/, '');
+const RAILWAY_API_BASE = (process.env.ASHES_RAILWAY_API_BASE || 'https://courteous-learning-production-d31e.up.railway.app').replace(/\/$/, '');
 
 function send(res, status, body) {
   res.setHeader('Cache-Control', 'no-store');
