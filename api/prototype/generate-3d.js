@@ -54,11 +54,36 @@ async function workerRequest(config,path,init={}){
   return fetch(`${config.base}${path}`,{...init,headers,signal:AbortSignal.timeout(25000)});
 }
 
+async function workerHealth(config){
+  try{
+    const upstream=await workerRequest(config,'/health',{method:'GET'});
+    const data=await upstream.json().catch(()=>({}));
+    return {ok:upstream.ok,status:upstream.status,data};
+  }catch(error){
+    return {ok:false,status:0,data:{detail:error?.message||'Worker health check failed'}};
+  }
+}
+
 export default async function handler(request,response){
   const worker=workerConfig();
   if(!worker)return send(response,503,{detail:'The Ashes TRELLIS GPU worker is offline. Configure ASHES_TRELLIS_WORKER_URL before generating real product geometry.',code:'TRELLIS_WORKER_NOT_CONFIGURED'});
   try{
+    if(request.method==='GET'&&String(request.query?.health||'')==='1'){
+      const health=await workerHealth(worker);
+      return send(response,health.ok?200:502,{worker_base:worker.base,worker_status:health.status,worker_health:health.data});
+    }
+
     if(request.method==='POST'){
+      const health=await workerHealth(worker);
+      if(!health.ok||health.data?.provider!=='modal'){
+        return send(response,502,{
+          detail:'The configured TRELLIS worker URL is not the active Ashes Modal worker.',
+          code:'TRELLIS_WORKER_MISMATCH',
+          worker_status:health.status,
+          worker_health:health.data,
+        });
+      }
+
       const productName=String(request.body?.product_name||'Product').slice(0,180);
       const inline=decodeInlineImage(request.body?.image_data_url);
       if(inline?.error)return send(response,inline.status||400,{detail:inline.error});
@@ -75,8 +100,6 @@ export default async function handler(request,response){
         const imageUrl=validPublicUrl(request.body?.image_url);
         if(!imageUrl)return send(response,400,{detail:'Upload a product image or provide a public HTTPS product image URL.'});
 
-        // Keep the Vercel -> Modal handoff deliberately minimal. The Modal worker
-        // owns reconstruction settings and decides single-image vs real multi-view.
         const payload={image_url:imageUrl,product_name:productName};
         if(Array.isArray(request.body?.view_urls)){
           const viewUrls=request.body.view_urls.map(validPublicUrl).filter(Boolean).slice(0,4);
@@ -90,10 +113,10 @@ export default async function handler(request,response){
       }
 
       const data=await upstream.json().catch(()=>({}));
-      if(!upstream.ok)return send(response,upstream.status,{detail:upstreamDetail(data,'The TRELLIS worker could not start this generation.'),worker_status:upstream.status});
+      if(!upstream.ok)return send(response,upstream.status,{detail:upstreamDetail(data,'The TRELLIS worker could not start this generation.'),worker_status:upstream.status,worker_health:health.data});
       const taskId=String(data.task_id||data.id||'');
       if(!taskId)return send(response,502,{detail:'The TRELLIS worker did not return a task ID.'});
-      return send(response,202,{task_id:taskId,status:data.status||'QUEUED',stage:data.stage||'QUEUED',views_expected:viewsExpected});
+      return send(response,202,{task_id:taskId,status:data.status||'QUEUED',stage:data.stage||'QUEUED',views_expected:viewsExpected,worker_health:health.data});
     }
     if(request.method==='GET'){
       const id=String(request.query?.id||'');
