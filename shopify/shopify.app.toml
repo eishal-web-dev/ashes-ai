@@ -1,6 +1,6 @@
 name = "Ashes"
-client_id = "REPLACE_WITH_SHOPIFY_CLIENT_ID"
-application_url = "https://REPLACE_WITH_YOUR_APP_URL"
+client_id = "c32e874c004cd9ea236c6c4af326f03a"
+application_url = "https://ashes-ai.vercel.app"
 embedded = true
 
 [access_scopes]
@@ -8,7 +8,7 @@ scopes = "read_products,write_products"
 
 [auth]
 redirect_urls = [
-  "https://REPLACE_WITH_YOUR_APP_URL/api/shopify/auth/callback"
+  "https://ashes-ai.vercel.app/api/shopify/auth/callback"
 ]
 
 [webhooks]
