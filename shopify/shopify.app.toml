@@ -1,0 +1,18 @@
+name = "Ashes"
+client_id = "c32e874c004cd9ea236c6c4af326f03a"
+application_url = "https://ashes-ai.vercel.app"
+embedded = true
+
+[access_scopes]
+scopes = "read_products,write_products"
+
+[auth]
+redirect_urls = [
+  "https://ashes-ai.vercel.app/api/shopify/auth/callback"
+]
+
+[webhooks]
+api_version = "2026-07"
+
+[pos]
+embedded = false
