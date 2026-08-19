@@ -55,6 +55,26 @@ jobs:
         if: steps.modal_credentials.outputs.ready == 'true'
         run: modal token info
 
+      - name: Patch TRELLIS build for Modal
+        if: steps.modal_credentials.outputs.ready == 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/trellis/modal_ashes_worker.py')
+          text = path.read_text()
+          old = '"source setup.sh --basic --spconv; "'
+          new = (
+              '"python -m pip install --no-cache-dir pillow imageio imageio-ffmpeg tqdm easydict opencv-python-headless scipy ninja rembg onnxruntime trimesh open3d xatlas pyvista pymeshfix igraph transformers; "\n'
+              '                "python -m pip install --no-cache-dir git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8; "\n'
+              '                "python -m pip install --no-cache-dir spconv-cu120; "'
+          )
+          if old not in text:
+              raise SystemExit('Expected TRELLIS setup command not found')
+          path.write_text(text.replace(old, new, 1))
+          print('Patched TRELLIS basic + spconv installation for Modal CUDA 12 build')
+          PY
+
       - name: Deploy Ashes TRELLIS worker
         if: steps.modal_credentials.outputs.ready == 'true'
         run: modal deploy tools/trellis/modal_ashes_worker.py --name ashes-trellis-worker
