@@ -60,9 +60,11 @@ def recover_first_legacy_shopify_asset() -> dict:
     if int(payload.get("count") or 0) != 1 or len(models) != 1:
         return {"recovered": 0, "reason": f"expected exactly one legacy model, found {payload.get('count')}"}
 
-    model_path = str(models[0].get("model_path") or "")
-    if not model_path.startswith("/v1/files/"):
-        return {"recovered": 0, "reason": "legacy model path missing"}
+    model = models[0]
+    model_id = str(model.get("model_id") or "")
+    model_path = str(model.get("model_path") or "")
+    if not model_id or not model_path.startswith("/v1/files/"):
+        return {"recovered": 0, "reason": "legacy model identity missing"}
     model_url = f"{_recovery_url()}{model_path}"
 
     handle = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
@@ -78,18 +80,32 @@ def recover_first_legacy_shopify_asset() -> dict:
         raw = temp.read_bytes()[:12]
         if len(raw) < 12 or raw[:4] != b"glTF":
             raise RuntimeError("legacy model is not valid GLB")
-        key = store_media(
-            API_BASE_URL,
-            temp,
-            f"models/shopify/{_shop().replace('.','-')}/{hashlib.sha256(product_id.encode()).hexdigest()[:32]}.glb",
-            "model/gltf-binary",
-        )
+
+        permanent = True
+        storage_error = None
+        try:
+            key = store_media(
+                API_BASE_URL,
+                temp,
+                f"models/shopify/{_shop().replace('.','-')}/{hashlib.sha256(product_id.encode()).hexdigest()[:32]}.glb",
+                "model/gltf-binary",
+            )
+        except Exception as exc:
+            # Keep the already-generated twin usable from Modal's persistent volume.
+            # Startup recovery will keep retrying permanent storage because this key
+            # does not start with models/shopify/.
+            permanent = False
+            storage_error = str(exc)[:500]
+            key = f"modal-recovery://{model_id}"
+
         collection("shopify_3d_assets").update_one(
             {"shop": _shop(), "product_id": product_id},
             {"$set": {
                 "shop": _shop(), "product_id": product_id, "product_name": product.get("title"),
                 "model_path": key, "source_task_id": "legacy-modal-recovery",
-                "size_bytes": temp.stat().st_size, "storefront_enabled": True, "updated_at": now_iso(),
+                "size_bytes": temp.stat().st_size, "storefront_enabled": True,
+                "storage_state": "permanent" if permanent else "modal_fallback",
+                "storage_error": storage_error, "updated_at": now_iso(),
             }, "$setOnInsert": {"created_at": now_iso()}}, upsert=True,
         )
         collection("shopify_generation_jobs").update_one(
@@ -100,6 +116,13 @@ def recover_first_legacy_shopify_asset() -> dict:
                 "model_path": key, "billing_month": now_iso()[:7], "completed_at": now_iso(), "updated_at": now_iso(),
             }, "$setOnInsert": {"created_at": now_iso()}}, upsert=True,
         )
-        return {"recovered": 1, "product": TARGET_HANDLE, "size_bytes": temp.stat().st_size, "model_path": key}
+        return {
+            "recovered": 1,
+            "product": TARGET_HANDLE,
+            "size_bytes": temp.stat().st_size,
+            "model_path": key,
+            "permanent": permanent,
+            "storage_error": storage_error,
+        }
     finally:
         temp.unlink(missing_ok=True)
