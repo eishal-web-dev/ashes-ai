@@ -75,6 +75,42 @@ jobs:
           print('Patched TRELLIS basic + spconv installation for Modal CUDA 12 build')
           PY
 
+      - name: Add protected recovery index
+        if: steps.modal_credentials.outputs.ready == 'true'
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/trellis/modal_ashes_worker.py')
+          text = path.read_text()
+          marker = '    @api.get("/v1/files/{model_id}/model.glb")\n'
+          insertion = '''    @api.get("/v1/recovery/models")
+    def recovery_models(request: Request, authorization: str | None = Header(default=None)):
+        authorize(authorization)
+        model_volume.reload()
+        rows = []
+        for path in Path(MODEL_ROOT).glob("*.glb"):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            model_id = path.stem
+            rows.append({
+                "model_id": model_id,
+                "size_bytes": stat.st_size,
+                "modified_at": stat.st_mtime,
+                "model_url": f"{base_url(request)}/v1/files/{model_id}/model.glb",
+            })
+        rows.sort(key=lambda row: row["modified_at"], reverse=True)
+        return {"count": len(rows), "models": rows[:10]}
+
+'''
+          if marker not in text:
+              raise SystemExit('Expected model file route marker not found')
+          path.write_text(text.replace(marker, insertion + marker, 1))
+          print('Added protected Modal recovery model index')
+          PY
+
       - name: Deploy Ashes TRELLIS worker
         if: steps.modal_credentials.outputs.ready == 'true'
         run: modal deploy tools/trellis/modal_ashes_worker.py --name ashes-trellis-worker
