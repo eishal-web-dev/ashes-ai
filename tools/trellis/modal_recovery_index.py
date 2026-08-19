@@ -31,7 +31,7 @@ web_secrets = (
 @modal.asgi_app()
 def web():
     import fastapi
-    from fastapi import Header, HTTPException, Request
+    from fastapi import Header, HTTPException
     from fastapi.responses import FileResponse
 
     api = fastapi.FastAPI(title="Ashes TRELLIS Recovery Index")
@@ -41,17 +41,12 @@ def web():
         if token and authorization != f"Bearer {token}":
             raise HTTPException(401, "Invalid worker token")
 
-    def base_url(request: Request) -> str:
-        host = request.headers.get("x-forwarded-host")
-        proto = request.headers.get("x-forwarded-proto", "https")
-        return (f"{proto}://{host}" if host else str(request.base_url)).rstrip("/")
-
     @api.get("/health")
     def health():
         return {"status": "ok", "service": "ashes-trellis-recovery"}
 
     @api.get("/v1/recovery/models")
-    def models(request: Request, authorization: str | None = Header(default=None)):
+    def models(authorization: str | None = Header(default=None)):
         authorize(authorization)
         try:
             model_volume.reload()
@@ -67,7 +62,7 @@ def web():
                 "model_id": path.stem,
                 "size_bytes": stat.st_size,
                 "modified_at": stat.st_mtime,
-                "model_url": f"{base_url(request)}/v1/files/{path.stem}/model.glb",
+                "model_path": f"/v1/files/{path.stem}/model.glb",
             })
         rows.sort(key=lambda row: row["modified_at"], reverse=True)
         return {"count": len(rows), "models": rows[:10]}
