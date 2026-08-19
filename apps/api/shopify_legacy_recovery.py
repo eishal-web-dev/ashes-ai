@@ -18,8 +18,11 @@ def _shop() -> str:
     return (os.getenv("SHOPIFY_SHOP") or "ashes-stack.myshopify.com").strip().lower()
 
 
-def _worker_url() -> str:
-    return os.getenv("ASHES_TRELLIS_WORKER_URL", "").strip().rstrip("/")
+def _recovery_url() -> str:
+    return os.getenv(
+        "ASHES_TRELLIS_RECOVERY_URL",
+        "https://ashes-ai-26--ashes-trellis-recovery-web.modal.run",
+    ).strip().rstrip("/")
 
 
 def _headers() -> dict[str, str]:
@@ -28,7 +31,6 @@ def _headers() -> dict[str, str]:
 
 
 def recover_first_legacy_shopify_asset() -> dict:
-    # Only for the very first demo model created before Shopify jobs were tracked.
     if collection("shopify_3d_assets").count_documents({"shop": _shop()}) > 0:
         return {"recovered": 0, "reason": "assets already exist"}
     if collection("shopify_generation_jobs").count_documents({"shop": _shop(), "counted": True}) > 0:
@@ -47,15 +49,14 @@ def recover_first_legacy_shopify_asset() -> dict:
     if not product:
         return {"recovered": 0, "reason": "target product not found"}
 
-    response = requests.get(f"{_worker_url()}/v1/recovery/models", headers=_headers(), timeout=30)
+    response = requests.get(f"{_recovery_url()}/v1/recovery/models", headers=_headers(), timeout=30)
     response.raise_for_status()
     payload = response.json()
     models = payload.get("models") or []
     if int(payload.get("count") or 0) != 1 or len(models) != 1:
         return {"recovered": 0, "reason": f"expected exactly one legacy model, found {payload.get('count')}"}
 
-    model = models[0]
-    model_url = str(model.get("model_url") or "")
+    model_url = str(models[0].get("model_url") or "")
     if not model_url:
         return {"recovered": 0, "reason": "legacy model URL missing"}
 
