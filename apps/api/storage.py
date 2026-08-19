@@ -4,6 +4,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 
 class StorageBackend:
@@ -89,8 +90,58 @@ class S3Storage(StorageBackend):
         return f"https://{self.bucket}.s3.{region}.amazonaws.com/{key}"
 
 
+class SupabaseStorage(StorageBackend):
+    def __init__(self):
+        import requests
+
+        self.requests = requests
+        self.base_url = os.environ['SUPABASE_URL'].rstrip('/')
+        self.service_key = os.environ['SUPABASE_SERVICE_ROLE_KEY']
+        self.bucket = os.environ['SUPABASE_STORAGE_BUCKET']
+
+    def _headers(self, content_type: Optional[str] = None) -> dict[str, str]:
+        headers = {
+            'Authorization': f'Bearer {self.service_key}',
+            'apikey': self.service_key,
+        }
+        if content_type:
+            headers['Content-Type'] = content_type
+        return headers
+
+    def _object_url(self, key: str) -> str:
+        bucket = quote(self.bucket, safe='')
+        encoded_key = '/'.join(quote(part, safe='') for part in key.lstrip('/').split('/'))
+        return f"{self.base_url}/storage/v1/object/{bucket}/{encoded_key}"
+
+    def put_file(self, source: Path, key: str, content_type: Optional[str] = None) -> str:
+        with source.open('rb') as handle:
+            response = self.requests.post(
+                self._object_url(key),
+                headers={**self._headers(content_type or 'application/octet-stream'), 'x-upsert': 'true'},
+                data=handle,
+                timeout=120,
+            )
+        if response.status_code not in {200, 201}:
+            raise RuntimeError(f"Supabase storage upload failed ({response.status_code}): {response.text[:400]}")
+        return key.lstrip('/')
+
+    def delete(self, key_or_path: str) -> None:
+        key = str(key_or_path).lstrip('/')
+        response = self.requests.delete(self._object_url(key), headers=self._headers(), timeout=30)
+        if response.status_code not in {200, 204, 404}:
+            raise RuntimeError(f"Supabase storage delete failed ({response.status_code}): {response.text[:250]}")
+
+    def public_url(self, key_or_path: str) -> str:
+        key = str(key_or_path).lstrip('/')
+        bucket = quote(self.bucket, safe='')
+        encoded_key = '/'.join(quote(part, safe='') for part in key.split('/'))
+        return f"{self.base_url}/storage/v1/object/public/{bucket}/{encoded_key}"
+
+
 def build_storage(local_root: Path, api_base_url: str) -> StorageBackend:
     provider = os.getenv('ASHES_STORAGE_PROVIDER', 'local').strip().lower()
+    if provider == 'supabase':
+        return SupabaseStorage()
     if provider in {'s3', 'r2', 'supabase-s3'}:
         return S3Storage()
     return LocalStorage(local_root, api_base_url)
