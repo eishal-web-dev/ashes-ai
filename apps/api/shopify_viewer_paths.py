@@ -59,7 +59,8 @@ def shopify_3d_viewer_path(product_id: str) -> HTMLResponse:
         html,
         headers={
             "Cache-Control": "no-store",
-            "Content-Security-Policy": "frame-ancestors https://admin.shopify.com https://*.myshopify.com; default-src 'self' https://ajax.googleapis.com; script-src 'self' https://ajax.googleapis.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self';",
+            "Content-Security-Policy": "frame-ancestors https://admin.shopify.com https://*.shopify.com https://*.myshopify.com; default-src 'self' https://ajax.googleapis.com; script-src 'self' https://ajax.googleapis.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self';",
+            "Referrer-Policy": "strict-origin-when-cross-origin",
         },
     )
 
