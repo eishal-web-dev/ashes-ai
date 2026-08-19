@@ -31,8 +31,8 @@ def _headers() -> dict[str, str]:
 
 
 def recover_first_legacy_shopify_asset() -> dict:
-    if collection("shopify_3d_assets").count_documents({"shop": _shop()}) > 0:
-        return {"recovered": 0, "reason": "assets already exist"}
+    # Only stop when a successful counted generation already exists. A stale/partial
+    # asset row from a failed storage upload must not block recovery.
     if collection("shopify_generation_jobs").count_documents({"shop": _shop(), "counted": True}) > 0:
         return {"recovered": 0, "reason": "usage already recorded"}
 
@@ -89,12 +89,14 @@ def recover_first_legacy_shopify_asset() -> dict:
                 "size_bytes": temp.stat().st_size, "storefront_enabled": True, "updated_at": now_iso(),
             }, "$setOnInsert": {"created_at": now_iso()}}, upsert=True,
         )
-        collection("shopify_generation_jobs").insert_one({
-            "task_id": "legacy-modal-recovery", "shop": _shop(), "product_id": product_id,
-            "product_name": product.get("title"), "status": "COMPLETED", "counted": True,
-            "model_path": key, "billing_month": now_iso()[:7], "created_at": now_iso(),
-            "completed_at": now_iso(), "updated_at": now_iso(),
-        })
+        collection("shopify_generation_jobs").update_one(
+            {"task_id": "legacy-modal-recovery", "shop": _shop()},
+            {"$set": {
+                "task_id": "legacy-modal-recovery", "shop": _shop(), "product_id": product_id,
+                "product_name": product.get("title"), "status": "COMPLETED", "counted": True,
+                "model_path": key, "billing_month": now_iso()[:7], "completed_at": now_iso(), "updated_at": now_iso(),
+            }, "$setOnInsert": {"created_at": now_iso()}}, upsert=True,
+        )
         return {"recovered": 1, "product": TARGET_HANDLE, "size_bytes": temp.stat().st_size}
     finally:
         temp.unlink(missing_ok=True)
