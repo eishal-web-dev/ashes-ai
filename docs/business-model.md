@@ -47,7 +47,7 @@ Current working hypothesis:
 
 | Plan | Price | Generation allowance | Active product guideline |
 |---|---:|---:|---:|
-| Trial | $0 / 30 days | 3 total | 3 |
+| Trial | $0 / 30 days | 2 total | 3 |
 | Starter | $19.99/mo | ~5/mo | ~15 |
 | Standard | $45.99/mo | ~20/mo | ~50 |
 | Pro | $149.99/mo | ~75/mo | ~250 |
@@ -133,6 +133,10 @@ Later:
 
 - automatic generation can be enabled under explicit plan/catalog budgets
 
+### One generation at a time per merchant/store
+
+During validation Ashes should allow only one active 3D reconstruction job at a time for a merchant/store. Additional generation requests wait until the active job succeeds or fails. This prevents accidental parallel GPU spend and makes plan usage easier to audit.
+
 ### Reuse before regenerate
 
 Before any generation job:
@@ -146,7 +150,7 @@ Before any generation job:
 
 ### Keep free trial bounded
 
-Current hypothesis: 3 total generations in a 30-day trial.
+The free trial is limited to **2 total successful 3D generations** during the 30-day trial.
 
 The free period is for proving merchant value, not bulk asset production followed by cancellation.
 
@@ -218,27 +222,3 @@ merchant contacted
 - MRR
 - ARPU
 - churn
-- gross margin
-- generation cost per merchant
-- active assets per merchant
-- international customers by country
-
-## 10. Revenue milestones
-
-Use evidence gates rather than fantasy forecasts.
-
-```text
-first paying merchant
- -> $1k MRR
- -> $10k MRR
- -> $100k MRR
- -> broader channel/enterprise expansion
-```
-
-Long-term high revenue is possible only if Ashes earns retention and distribution. Revenue forecasts should be updated from actual conversion, churn and ARPU data once available.
-
-## 11. Company structure direction
-
-The intended umbrella name is **Ashes Stack Ltd**, with Ashes Commerce as the first focused product.
-
-The company should not launch many unrelated products before Ashes Commerce has traction. The "Stack" structure preserves future expansion without diluting the current goal.
