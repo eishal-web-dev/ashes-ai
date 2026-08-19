@@ -25,6 +25,7 @@ import apps.api.prototype  # noqa: F401
 import apps.api.prototype_generate_3d  # noqa: F401
 import apps.api.shopify_routes  # noqa: F401
 import apps.api.shopify_generation  # noqa: F401
+import apps.api.modal_recovery_proxy  # noqa: F401
 import apps.api.shopify_asset_startup  # noqa: F401
 from apps.api.mongo_db import database
 
@@ -44,6 +45,11 @@ def _storage_info() -> dict:
         info["configured"] = not missing
         info["missing"] = missing
         info["public_base_url"] = os.getenv("ASHES_S3_PUBLIC_BASE_URL")
+    if provider == "supabase":
+        required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_STORAGE_BUCKET"]
+        missing = [name for name in required if not os.getenv(name)]
+        info["configured"] = not missing
+        info["missing"] = missing
     return info
 
 
