@@ -64,7 +64,7 @@ class S3Storage(StorageBackend):
             region_name=region,
             aws_access_key_id=os.getenv('ASHES_S3_ACCESS_KEY_ID'),
             aws_secret_access_key=os.getenv('ASHES_S3_SECRET_ACCESS_KEY'),
-            config=Config(signature_version='s3v4'),
+            config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
         )
 
     def put_file(self, source: Path, key: str, content_type: Optional[str] = None) -> str:
