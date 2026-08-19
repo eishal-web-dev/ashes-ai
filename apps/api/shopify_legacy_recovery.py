@@ -31,11 +31,6 @@ def _headers() -> dict[str, str]:
 
 
 def recover_first_legacy_shopify_asset() -> dict:
-    # Only stop when a successful counted generation already exists. A stale/partial
-    # asset row from a failed storage upload must not block recovery.
-    if collection("shopify_generation_jobs").count_documents({"shop": _shop(), "counted": True}) > 0:
-        return {"recovered": 0, "reason": "usage already recorded"}
-
     from apps.api.shopify_routes import _access_token, _graphql
 
     token, _ = _access_token()
@@ -48,6 +43,15 @@ def recover_first_legacy_shopify_asset() -> dict:
     product = next((p for p in products if p.get("handle") == TARGET_HANDLE), None)
     if not product:
         return {"recovered": 0, "reason": "target product not found"}
+
+    product_id = str(product["id"])
+    existing = collection("shopify_3d_assets").find_one({"shop": _shop(), "product_id": product_id}) or {}
+    counted = collection("shopify_generation_jobs").count_documents(
+        {"shop": _shop(), "product_id": product_id, "counted": True}
+    ) > 0
+    existing_path = str(existing.get("model_path") or "")
+    if counted and existing_path.startswith("models/shopify/"):
+        return {"recovered": 0, "reason": "already stored", "product": TARGET_HANDLE}
 
     response = requests.get(f"{_recovery_url()}/v1/recovery/models", headers=_headers(), timeout=30)
     response.raise_for_status()
@@ -74,7 +78,6 @@ def recover_first_legacy_shopify_asset() -> dict:
         raw = temp.read_bytes()[:12]
         if len(raw) < 12 or raw[:4] != b"glTF":
             raise RuntimeError("legacy model is not valid GLB")
-        product_id = str(product["id"])
         key = store_media(
             API_BASE_URL,
             temp,
@@ -97,6 +100,6 @@ def recover_first_legacy_shopify_asset() -> dict:
                 "model_path": key, "billing_month": now_iso()[:7], "completed_at": now_iso(), "updated_at": now_iso(),
             }, "$setOnInsert": {"created_at": now_iso()}}, upsert=True,
         )
-        return {"recovered": 1, "product": TARGET_HANDLE, "size_bytes": temp.stat().st_size}
+        return {"recovered": 1, "product": TARGET_HANDLE, "size_bytes": temp.stat().st_size, "model_path": key}
     finally:
         temp.unlink(missing_ok=True)
