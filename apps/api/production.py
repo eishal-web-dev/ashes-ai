@@ -30,6 +30,7 @@ import apps.api.shopify_publish  # noqa: F401
 import apps.api.modal_recovery_proxy  # noqa: F401
 import apps.api.shopify_viewer_paths  # noqa: F401
 import apps.api.shopify_asset_startup  # noqa: F401
+import apps.api.shopify_publish_click_fix  # noqa: F401
 from apps.api.mongo_db import database
 
 
