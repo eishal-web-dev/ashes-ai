@@ -4,7 +4,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 
 class StorageBackend:
@@ -95,7 +95,16 @@ class SupabaseStorage(StorageBackend):
         import requests
 
         self.requests = requests
-        self.base_url = os.environ['SUPABASE_URL'].rstrip('/')
+        raw = (os.getenv('SUPABASE_URL') or os.getenv('ASHES_S3_ENDPOINT_URL') or '').rstrip('/')
+        if not raw:
+            raise RuntimeError('Supabase URL is not configured')
+        parsed = urlparse(raw)
+        host = parsed.hostname or ''
+        if host.endswith('.storage.supabase.co'):
+            project_ref = host.removesuffix('.storage.supabase.co')
+            self.base_url = f"https://{project_ref}.supabase.co"
+        else:
+            self.base_url = f"{parsed.scheme or 'https'}://{host}" if host else raw
         self.service_key = os.environ['SUPABASE_SERVICE_ROLE_KEY']
         self.bucket = os.environ['SUPABASE_STORAGE_BUCKET']
 
