@@ -56,9 +56,10 @@ def recover_first_legacy_shopify_asset() -> dict:
     if int(payload.get("count") or 0) != 1 or len(models) != 1:
         return {"recovered": 0, "reason": f"expected exactly one legacy model, found {payload.get('count')}"}
 
-    model_url = str(models[0].get("model_url") or "")
-    if not model_url:
-        return {"recovered": 0, "reason": "legacy model URL missing"}
+    model_path = str(models[0].get("model_path") or "")
+    if not model_path.startswith("/v1/files/"):
+        return {"recovered": 0, "reason": "legacy model path missing"}
+    model_url = f"{_recovery_url()}{model_path}"
 
     handle = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
     temp = Path(handle.name)
