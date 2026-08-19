@@ -25,6 +25,7 @@ import apps.api.prototype  # noqa: F401
 import apps.api.prototype_generate_3d  # noqa: F401
 import apps.api.shopify_routes  # noqa: F401
 import apps.api.shopify_generation  # noqa: F401
+import apps.api.shopify_asset_startup  # noqa: F401
 from apps.api.mongo_db import database
 
 
