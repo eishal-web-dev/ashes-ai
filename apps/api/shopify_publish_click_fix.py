@@ -7,6 +7,7 @@ from apps.api.mongo_main import app
 
 
 _INJECT = r'''
+<div id="ashesBuildMarker" style="position:fixed;right:12px;bottom:12px;z-index:10000;background:#111;border:1px solid #333;color:#8f8f8f;border-radius:999px;padding:6px 9px;font:11px system-ui">Ashes Shopify build 2026.08.19-publish</div>
 <script>
 (function(){
   const grid = document.getElementById('products');
@@ -71,11 +72,14 @@ class ShopifyPublishClickFixMiddleware(BaseHTTPMiddleware):
         async for chunk in response.body_iterator:
             body += chunk
         text = body.decode('utf-8', errors='replace')
-        if 'ashesPublishFix' not in text:
+        if 'ashesBuildMarker' not in text:
             text = text.replace('</body>', _INJECT + '</body>')
 
         headers = dict(response.headers)
         headers.pop('content-length', None)
+        headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        headers['Pragma'] = 'no-cache'
+        headers['Expires'] = '0'
         return Response(
             content=text,
             status_code=response.status_code,
