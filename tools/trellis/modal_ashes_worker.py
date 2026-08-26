@@ -17,7 +17,7 @@ TRELLIS_ROOT = "/opt/TRELLIS"
 MODEL_ROOT = "/models"
 CACHE_ROOT = "/cache"
 MAX_IMAGE_BYTES = 12_000_000
-DEFAULT_STEPS = 24
+DEFAULT_STEPS = 16
 
 
 def _install_trellis_with_gpu() -> None:
@@ -242,7 +242,7 @@ def _run_reconstruction(images: list, output_path: Path) -> dict:
     steps = max(12, min(32, int(os.getenv("ASHES_TRELLIS_STEPS", str(DEFAULT_STEPS)))))
     if len(images) >= 3:
         outputs = pipeline.run_multi_image(
-            images[:4], seed=42, formats=["mesh", "gaussian"], mode="multidiffusion",
+            images[:3], seed=42, formats=["mesh", "gaussian"], mode="multidiffusion",
             sparse_structure_sampler_params={"steps": steps, "cfg_strength": 7.5},
             slat_sampler_params={"steps": steps, "cfg_strength": 3.0},
         )
@@ -255,11 +255,12 @@ def _run_reconstruction(images: list, output_path: Path) -> dict:
         )
         mode = "TRELLIS_SINGLE_IMAGE"
 
+    torch.cuda.empty_cache()
     glb_scene = postprocessing_utils.to_glb(
         outputs["gaussian"][0],
         outputs["mesh"][0],
         simplify=0.70,
-        texture_size=2048,
+        texture_size=1024 if len(images) >= 3 else 2048,
     )
     binary = glb_scene.export(file_type="glb")
     if not isinstance(binary, (bytes, bytearray)):
