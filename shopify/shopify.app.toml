@@ -1,6 +1,6 @@
-name = "Ashes"
+name = "Ashes AI"
 client_id = "c32e874c004cd9ea236c6c4af326f03a"
-application_url = "https://ashes-ai.vercel.app/api/shopify/app"
+application_url = "https://ashes-ai-production.up.railway.app/api/shopify/app"
 embedded = true
 
 [access_scopes]
@@ -8,11 +8,19 @@ scopes = "read_products,write_products"
 
 [auth]
 redirect_urls = [
-  "https://ashes-ai.vercel.app/api/shopify/auth/callback"
+  "https://ashes-ai-production.up.railway.app/api/shopify/auth/callback"
 ]
 
 [webhooks]
 api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+topics = ["app/uninstalled"]
+uri = "https://ashes-ai-production.up.railway.app/api/shopify/webhooks/app-uninstalled"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+uri = "https://ashes-ai-production.up.railway.app/api/shopify/webhooks/compliance"
 
 [pos]
 embedded = false
