@@ -6,16 +6,17 @@ on:
     branches: [main]
     paths:
       - 'tools/trellis/modal_ashes_worker.py'
+      - 'scripts/patch_trellis_multiview_t4.py'
       - '.github/workflows/deploy-modal-worker.yml'
 
 concurrency:
   group: ashes-modal-worker
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
     name: Deploy TRELLIS worker to Modal
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
@@ -32,31 +33,30 @@ jobs:
             echo "Modal credentials are configured."
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Modal credentials are not configured yet; deployment is being skipped safely."
+            echo "Modal credentials are not configured; deployment cannot continue."
+            exit 1
           fi
 
       - name: Checkout repository
-        if: steps.modal_credentials.outputs.ready == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
-        if: steps.modal_credentials.outputs.ready == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: Install Modal CLI
-        if: steps.modal_credentials.outputs.ready == 'true'
         run: |
           python -m pip install --upgrade pip
           python -m pip install modal
 
       - name: Verify Modal token
-        if: steps.modal_credentials.outputs.ready == 'true'
         run: modal token info
 
+      - name: Apply T4-safe multi-view profile
+        run: python scripts/patch_trellis_multiview_t4.py
+
       - name: Patch TRELLIS build for Modal
-        if: steps.modal_credentials.outputs.ready == 'true'
         shell: bash
         run: |
           python - <<'PY'
@@ -69,48 +69,28 @@ jobs:
               '                "python -m pip install --no-cache-dir git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8; "\n'
               '                "python -m pip install --no-cache-dir spconv-cu120; "'
           )
-          if old not in text:
-              raise SystemExit('Expected TRELLIS setup command not found')
-          path.write_text(text.replace(old, new, 1))
-          print('Patched TRELLIS basic + spconv installation for Modal CUDA 12 build')
-          PY
-
-      - name: Add protected recovery index
-        if: steps.modal_credentials.outputs.ready == 'true'
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('tools/trellis/modal_ashes_worker.py')
-          text = path.read_text()
-          marker = '    @api.get("/v1/files/{model_id}/model.glb")\n'
-          insertion = '''    @api.get("/v1/recovery/models")
-    def recovery_models(request: Request, authorization: str | None = Header(default=None)):
-        authorize(authorization)
-        model_volume.reload()
-        rows = []
-        for path in Path(MODEL_ROOT).glob("*.glb"):
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            model_id = path.stem
-            rows.append({
-                "model_id": model_id,
-                "size_bytes": stat.st_size,
-                "modified_at": stat.st_mtime,
-                "model_url": f"{base_url(request)}/v1/files/{model_id}/model.glb",
-            })
-        rows.sort(key=lambda row: row["modified_at"], reverse=True)
-        return {"count": len(rows), "models": rows[:10]}
-
-'''
-          if marker not in text:
-              raise SystemExit('Expected model file route marker not found')
-          path.write_text(text.replace(marker, insertion + marker, 1))
-          print('Added protected Modal recovery model index')
+          if old in text:
+              path.write_text(text.replace(old, new, 1))
+              print('Patched TRELLIS dependency installation for Modal')
+          else:
+              print('TRELLIS dependency patch already applied or no longer required')
           PY
 
       - name: Deploy Ashes TRELLIS worker
-        if: steps.modal_credentials.outputs.ready == 'true'
         run: modal deploy tools/trellis/modal_ashes_worker.py --name ashes-trellis-worker
+
+      - name: Verify deployed endpoint
+        shell: bash
+        run: |
+          sleep 3
+          python - <<'PY'
+          import os, requests
+          url='https://ashes-ai-26--ashes-trellis-worker-web.modal.run/health'
+          headers={}
+          token=os.getenv('ASHES_TRELLIS_WORKER_TOKEN','').strip()
+          if token:
+              headers['Authorization']=f'Bearer {token}'
+          r=requests.get(url,headers=headers,timeout=30)
+          print(r.status_code, r.text[:1000])
+          r.raise_for_status()
+          PY
