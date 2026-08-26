@@ -1,0 +1,32 @@
+name: Patch TRELLIS T4 Multi-view
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/patch_trellis_multiview_t4.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Patch worker
+        run: python scripts/patch_trellis_multiview_t4.py
+      - name: Commit worker patch
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/trellis/modal_ashes_worker.py
+          git commit -m "Make TRELLIS multi-view T4-safe"
+          git push
