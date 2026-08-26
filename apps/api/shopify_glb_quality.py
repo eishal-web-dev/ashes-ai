@@ -67,13 +67,22 @@ def validate_textured_glb(path: Path) -> dict[str, int]:
     }
 
 
-def _validated_persist(*, task_id: str, model_url: str, product_id: str, product_name: str) -> dict[str, Any]:
-    suffix = ".glb"
-    with tempfile.NamedTemporaryFile(prefix="ashes-quality-", suffix=suffix, delete=False) as handle:
+def _validated_persist(task_id: str, model_url: str):
+    job = generation.collection("shopify_generation_jobs").find_one(
+        {"task_id": task_id, "shop": generation._shop()}
+    ) or {}
+    product_id = str(job.get("product_id") or "").strip()
+
+    with tempfile.NamedTemporaryFile(prefix="ashes-quality-", suffix=".glb", delete=False) as handle:
         temp_path = Path(handle.name)
     try:
         try:
-            with requests.get(model_url, headers=generation._headers(), timeout=generation._timeout(), stream=True) as response:
+            with requests.get(
+                model_url,
+                headers=generation._headers(False),
+                timeout=120,
+                stream=True,
+            ) as response:
                 response.raise_for_status()
                 size = 0
                 with temp_path.open("wb") as output:
@@ -86,20 +95,21 @@ def _validated_persist(*, task_id: str, model_url: str, product_id: str, product
                         output.write(chunk)
         except requests.RequestException as exc:
             raise RuntimeError(f"Ashes could not quality-check the generated GLB: {str(exc)[:180]}") from exc
+
         quality = validate_textured_glb(temp_path)
-        stored = _original_persist(
-            task_id=task_id,
-            model_url=model_url,
-            product_id=product_id,
-            product_name=product_name,
-        )
-        try:
-            generation.collection("shopify_3d_assets").update_one(
-                {"shop": generation._shop(), "product_id": product_id},
-                {"$set": {"quality": quality, "quality_status": "TEXTURED_VERIFIED"}},
-            )
-        except Exception:
-            pass
+
+        # Current persistence API only accepts task_id + model_url and derives
+        # Shopify product identity from the saved generation job.
+        stored = _original_persist(task_id, model_url)
+
+        if product_id:
+            try:
+                generation.collection("shopify_3d_assets").update_one(
+                    {"shop": generation._shop(), "product_id": product_id},
+                    {"$set": {"quality": quality, "quality_status": "TEXTURED_VERIFIED"}},
+                )
+            except Exception:
+                pass
         return stored
     finally:
         temp_path.unlink(missing_ok=True)
