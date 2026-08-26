@@ -7,6 +7,7 @@ on:
     paths:
       - 'tools/trellis/modal_ashes_worker.py'
       - 'scripts/patch_trellis_multiview_t4.py'
+      - 'scripts/patch_trellis_l4.py'
       - '.github/workflows/deploy-modal-worker.yml'
 
 concurrency:
@@ -53,8 +54,11 @@ jobs:
       - name: Verify Modal token
         run: modal token info
 
-      - name: Apply T4-safe multi-view profile
+      - name: Apply memory-safe multi-view profile
         run: python scripts/patch_trellis_multiview_t4.py
+
+      - name: Move TRELLIS worker to L4
+        run: python scripts/patch_trellis_l4.py
 
       - name: Patch TRELLIS build for Modal
         shell: bash
@@ -84,6 +88,7 @@ jobs:
         run: |
           sleep 3
           python - <<'PY'
+          import json
           import os
           import urllib.request
 
@@ -99,4 +104,7 @@ jobs:
               print(r.status, body)
               if r.status < 200 or r.status >= 300:
                   raise SystemExit(f'Health check failed with HTTP {r.status}')
+              data = json.loads(body)
+              if data.get('gpu') != 'L4':
+                  raise SystemExit(f"Expected L4 worker, got {data.get('gpu')!r}")
           PY
