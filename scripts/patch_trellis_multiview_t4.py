@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# This script is intentionally idempotent so the CI patch can run safely more than once.
 path = Path('tools/trellis/modal_ashes_worker.py')
 text = path.read_text(encoding='utf-8')
 original = text
