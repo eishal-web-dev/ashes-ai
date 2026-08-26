@@ -68,8 +68,12 @@ _INJECT = r'''
       if(d.reused&&d.status==='COMPLETED'){activeTask=null;await loadProducts();openViewer(d.viewer_url,product.title);return}
       activeTask=d.task_id;state.textContent='TRELLIS multi-view reconstruction · 3 views';await poll(d.task_id,state);
     }catch(e){
-      state.className='state err';state.textContent=e.message;engineEl.textContent='Needs attention';activeTask=null;
-      await loadPlans().catch(()=>{});render(productsCache);
+      state.className='state err';
+      state.textContent='3D generation failed: '+(e && e.message ? e.message : String(e));
+      engineEl.textContent='Needs attention';
+      activeTask=null;
+      await loadPlans().catch(()=>{});
+      document.querySelectorAll('[data-generate]').forEach(btn=>btn.disabled=false);
     }
   };
 
