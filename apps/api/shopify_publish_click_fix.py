@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import html
+import os
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
@@ -7,7 +10,7 @@ from apps.api.mongo_main import app
 
 
 _INJECT = r'''
-<div id="ashesBuildMarker" style="position:fixed;right:12px;bottom:12px;z-index:10000;background:#111;border:1px solid #333;color:#8f8f8f;border-radius:999px;padding:6px 9px;font:11px system-ui">Ashes Shopify build 2026.08.19-publish</div>
+<div id="ashesBuildMarker" style="position:fixed;right:12px;bottom:12px;z-index:10000;background:#111;border:1px solid #333;color:#8f8f8f;border-radius:999px;padding:6px 9px;font:11px system-ui">Ashes Shopify build 2026.08.26-session-auth</div>
 <script>
 (function(){
   const grid = document.getElementById('products');
@@ -57,6 +60,39 @@ _INJECT = r'''
 </script>
 '''
 
+_SESSION_FETCH = r'''
+<script>
+(function () {
+  const originalFetch = window.fetch.bind(window);
+  const protectedPaths = [
+    '/api/shopify/products',
+    '/api/shopify/plans',
+    '/api/shopify/generate-3d',
+    '/api/shopify/publish-3d',
+    '/api/shopify/assets'
+  ];
+
+  window.fetch = async function(input, init) {
+    init = init ? Object.assign({}, init) : {};
+    const raw = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+    let url;
+    try { url = new URL(raw, window.location.origin); } catch (_) { return originalFetch(input, init); }
+    const needsToken = url.origin === window.location.origin && protectedPaths.some(path => url.pathname.startsWith(path));
+    if (needsToken) {
+      if (!window.shopify || typeof window.shopify.idToken !== 'function') {
+        throw new Error('Shopify App Bridge session is unavailable. Reopen Ashes AI from Shopify Admin.');
+      }
+      const token = await window.shopify.idToken();
+      const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined) || {});
+      headers.set('Authorization', 'Bearer ' + token);
+      init.headers = headers;
+    }
+    return originalFetch(input, init);
+  };
+})();
+</script>
+'''
+
 
 class ShopifyPublishClickFixMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
@@ -72,6 +108,15 @@ class ShopifyPublishClickFixMiddleware(BaseHTTPMiddleware):
         async for chunk in response.body_iterator:
             body += chunk
         text = body.decode('utf-8', errors='replace')
+
+        client_id = (os.getenv('SHOPIFY_CLIENT_ID') or os.getenv('ASHES_SHOPIFY_CLIENT_ID') or '').strip()
+        app_bridge_head = (
+            '<meta name="shopify-api-key" content="' + html.escape(client_id, quote=True) + '">'
+            '<script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>'
+            + _SESSION_FETCH
+        )
+        if 'cdn.shopify.com/shopifycloud/app-bridge.js' not in text:
+            text = text.replace('<head>', '<head>' + app_bridge_head, 1)
         if 'ashesBuildMarker' not in text:
             text = text.replace('</body>', _INJECT + '</body>')
 
