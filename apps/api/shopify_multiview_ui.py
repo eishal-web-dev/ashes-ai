@@ -7,6 +7,7 @@ from apps.api.mongo_main import app
 
 
 _INJECT = r'''
+<!-- ASHES_MULTIVIEW_UI_V3 -->
 <script>
 (function(){
   const imageUrls = p => Array.isArray(p && p.ashes_images) ? p.ashes_images.slice(0,3) : [];
@@ -96,7 +97,7 @@ class ShopifyMultiViewUIMiddleware(BaseHTTPMiddleware):
         async for chunk in response.body_iterator:
             body+=chunk
         text=body.decode('utf-8',errors='replace')
-        if 'generate-3d-multiview' not in text:
+        if 'ASHES_MULTIVIEW_UI_V3' not in text:
             text=text.replace('</body>',_INJECT+'</body>')
         headers=dict(response.headers)
         headers.pop('content-length',None)
