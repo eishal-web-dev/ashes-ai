@@ -47,9 +47,14 @@ def _repair_asset_from_job(product_id: str) -> dict[str, Any] | None:
             {"shop": generation._shop(), "product_id": product_id},
             sort=[("created_at", -1)],
         ) or job
+        retry_status = str(job.get("status") or "").upper()
+        retry_error = str(job.get("error") or "").replace("\n", " ")[:900]
+        print(
+            f"ASHES_SHOPIFY_STORAGE_RETRY_RESULT product={product_id} task={task_id} "
+            f"status={retry_status} error={retry_error or 'none'}"
+        )
 
     status = str(job.get("status") or "").upper()
-    model_url = str(job.get("model_url") or "").strip()
 
     # Older failed jobs may predate durable model_url storage. Ask Modal for the
     # same task once; if it still exists, _finish_job now records model_url before
@@ -65,6 +70,13 @@ def _repair_asset_from_job(product_id: str) -> dict[str, Any] | None:
             {"shop": generation._shop(), "product_id": product_id},
             sort=[("created_at", -1)],
         ) or job
+        poll_status = str(job.get("status") or "").upper()
+        poll_error = str(job.get("error") or "").replace("\n", " ")[:900]
+        if poll_status != "COMPLETED":
+            print(
+                f"ASHES_SHOPIFY_RECOVERY_RESULT product={product_id} task={task_id} "
+                f"status={poll_status} error={poll_error or 'none'}"
+            )
 
     model_path = job.get("model_path")
     if str(job.get("status") or "").upper() != "COMPLETED" or not model_path:
