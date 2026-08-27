@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -182,39 +183,123 @@ def shopify_subscribe(plan_key: str, request: Request) -> dict[str, Any]:
     return {"ok": True, "plan": plan_key, "confirmation_url": confirmation_url}
 
 
-@app.get("/api/shopify/billing/return")
-def shopify_billing_return(plan: str, request: Request):
-    selected = _plan(plan)
-    if selected.get("amount") is None:
-        return RedirectResponse("/api/shopify/app", status_code=302)
-
-    token, _ = _access_token()
+def _active_subscription_for_intent(token: str, subscription_id: str, expected_name: str) -> dict[str, Any] | None:
+    """Verify the exact subscription Ashes created instead of trusting callback query params."""
     query = """
-    query AshesActiveSubscriptions {
+    query AshesSubscriptionById($id: ID!) {
+      node(id: $id) {
+        ... on AppSubscription {
+          id
+          name
+          status
+          test
+        }
+      }
       currentAppInstallation {
         activeSubscriptions { id name status test }
       }
     }
     """
-    result = _graphql(token, query)
-    subscriptions = ((((result.get("data") or {}).get("currentAppInstallation") or {}).get("activeSubscriptions")) or [])
-    expected_name = f"Ashes AI — {selected['name']}"
-    match = next((s for s in subscriptions if s.get("name") == expected_name and str(s.get("status")) == "ACTIVE"), None)
-    if not match:
+    result = _graphql(token, query, {"id": subscription_id})
+    data = result.get("data") or {}
+    node = data.get("node") or {}
+    if (
+        str(node.get("id") or "") == subscription_id
+        and node.get("name") == expected_name
+        and str(node.get("status") or "").upper() == "ACTIVE"
+    ):
+        return node
+
+    subscriptions = ((data.get("currentAppInstallation") or {}).get("activeSubscriptions")) or []
+    return next(
+        (
+            s
+            for s in subscriptions
+            if str(s.get("id") or "") == subscription_id
+            and s.get("name") == expected_name
+            and str(s.get("status") or "").upper() == "ACTIVE"
+        ),
+        None,
+    )
+
+
+@app.get("/api/shopify/billing/return")
+def shopify_billing_return(plan: str, request: Request, charge_id: str | None = None):
+    selected = _plan(plan)
+    if selected.get("amount") is None:
+        return RedirectResponse("/api/shopify/app", status_code=302)
+
+    shop = _shop().lower()
+    intent = collection("shopify_billing_intents").find_one(
+        {"shop": shop, "plan_key": plan, "status": "PENDING_APPROVAL"},
+        sort=[("updated_at", -1)],
+    )
+    if not intent or not intent.get("subscription_id"):
         return HTMLResponse(
-            "<h2>Ashes billing was not activated.</h2><p>You can return to Shopify and choose the plan again.</p>",
+            "<h2>Ashes could not verify this billing approval.</h2>"
+            "<p>No matching pending checkout was found. Return to Shopify and choose the plan again.</p>",
             status_code=402,
         )
 
+    subscription_id = str(intent["subscription_id"])
+    expected_name = f"Ashes AI — {selected['name']}"
+    token, _ = _access_token()
+
+    # Shopify can redirect back a moment before activeSubscriptions has propagated.
+    # Verify the exact subscription ID several times before deciding the approval failed.
+    match: dict[str, Any] | None = None
+    for attempt in range(6):
+        try:
+            match = _active_subscription_for_intent(token, subscription_id, expected_name)
+        except Exception as exc:
+            print(
+                f"ASHES_SHOPIFY_BILLING_VERIFY attempt={attempt + 1} "
+                f"plan={plan} subscription={subscription_id} error={exc}"
+            )
+        if match:
+            break
+        if attempt < 5:
+            time.sleep(1.0)
+
+    # Development stores sometimes return a legacy-looking charge_id for a GraphQL
+    # test subscription before the subscription appears in activeSubscriptions.
+    # Permit that fallback ONLY for an Ashes-created pending TEST intent. Production
+    # billing never trusts charge_id by itself.
+    test_callback_fallback = bool(
+        not match
+        and charge_id
+        and bool(intent.get("test"))
+        and _billing_test_mode()
+    )
+    if test_callback_fallback:
+        match = {
+            "id": subscription_id,
+            "name": expected_name,
+            "status": "ACTIVE",
+            "test": True,
+        }
+        print(
+            f"ASHES_SHOPIFY_BILLING_TEST_APPROVED plan={plan} "
+            f"subscription={subscription_id} charge_id={charge_id}"
+        )
+
+    if not match:
+        return HTMLResponse(
+            "<h2>Ashes billing is still being confirmed by Shopify.</h2>"
+            "<p>Return to Shopify and reopen Ashes in a few seconds. You do not need to approve the charge again.</p>",
+            status_code=202,
+        )
+
     collection("shopify_accounts").update_one(
-        {"shop": _shop().lower()},
+        {"shop": shop},
         {
             "$set": {
-                "shop": _shop().lower(),
+                "shop": shop,
                 "plan_key": plan,
                 "shopify_subscription_id": match.get("id"),
                 "shopify_subscription_name": match.get("name"),
                 "shopify_subscription_test": bool(match.get("test")),
+                "shopify_charge_id": charge_id,
                 "billing_activated_at": now_iso(),
                 "updated_at": now_iso(),
             },
@@ -222,9 +307,21 @@ def shopify_billing_return(plan: str, request: Request):
         },
         upsert=True,
     )
-    collection("shopify_billing_intents").update_many(
-        {"shop": _shop().lower(), "plan_key": plan, "status": "PENDING_APPROVAL"},
-        {"$set": {"status": "ACTIVE", "activated_at": now_iso(), "updated_at": now_iso()}},
+    collection("shopify_billing_intents").update_one(
+        {"_id": intent["_id"]},
+        {
+            "$set": {
+                "status": "ACTIVE",
+                "shopify_charge_id": charge_id,
+                "activated_at": now_iso(),
+                "updated_at": now_iso(),
+            }
+        },
+    )
+
+    print(
+        f"ASHES_SHOPIFY_BILLING_ACTIVATED shop={shop} plan={plan} "
+        f"subscription={match.get('id')} test={bool(match.get('test'))}"
     )
 
     # Return into the embedded app through Shopify admin instead of leaving the merchant on Railway.
