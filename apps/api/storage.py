@@ -54,16 +54,21 @@ class S3Storage(StorageBackend):
         import boto3
         from botocore.config import Config
 
-        self.bucket = os.environ['ASHES_S3_BUCKET']
-        self.public_base_url = os.getenv('ASHES_S3_PUBLIC_BASE_URL', '').rstrip('/')
-        endpoint_url = os.getenv('ASHES_S3_ENDPOINT_URL') or None
-        region = os.getenv('ASHES_S3_REGION') or 'auto'
+        self.bucket = os.environ['ASHES_S3_BUCKET'].strip()
+        self.public_base_url = os.getenv('ASHES_S3_PUBLIC_BASE_URL', '').strip().rstrip('/')
+        endpoint_raw = os.getenv('ASHES_S3_ENDPOINT_URL', '').strip()
+        endpoint_url = endpoint_raw or None
+        region = (os.getenv('ASHES_S3_REGION') or 'auto').strip()
+        access_key = (os.getenv('ASHES_S3_ACCESS_KEY_ID') or '').strip()
+        secret_key = (os.getenv('ASHES_S3_SECRET_ACCESS_KEY') or '').strip()
+        if not access_key or not secret_key:
+            raise RuntimeError('S3 credentials are not configured')
         self.client = boto3.client(
             's3',
             endpoint_url=endpoint_url,
             region_name=region,
-            aws_access_key_id=os.getenv('ASHES_S3_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.getenv('ASHES_S3_SECRET_ACCESS_KEY'),
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
             config=Config(
                 signature_version='s3v4',
                 request_checksum_calculation='when_required',
@@ -73,10 +78,6 @@ class S3Storage(StorageBackend):
         )
 
     def put_file(self, source: Path, key: str, content_type: Optional[str] = None) -> str:
-        # Supabase's S3-compatible endpoint supports standard PutObject. Using a
-        # direct single-request upload avoids boto3's managed-transfer extras
-        # (multipart/checksum negotiation) that some S3-compatible providers do
-        # not implement exactly like AWS S3.
         kwargs = {
             'Bucket': self.bucket,
             'Key': key,
@@ -95,10 +96,10 @@ class S3Storage(StorageBackend):
         key = str(key_or_path).lstrip('/')
         if self.public_base_url:
             return f"{self.public_base_url}/{key}"
-        endpoint = os.getenv('ASHES_S3_ENDPOINT_URL', '').rstrip('/')
+        endpoint = os.getenv('ASHES_S3_ENDPOINT_URL', '').strip().rstrip('/')
         if endpoint:
             return f"{endpoint}/{self.bucket}/{key}"
-        region = os.getenv('ASHES_S3_REGION', 'us-east-1')
+        region = (os.getenv('ASHES_S3_REGION') or 'us-east-1').strip()
         return f"https://{self.bucket}.s3.{region}.amazonaws.com/{key}"
 
 
@@ -107,7 +108,7 @@ class SupabaseStorage(StorageBackend):
         import requests
 
         self.requests = requests
-        raw = (os.getenv('SUPABASE_URL') or os.getenv('ASHES_S3_ENDPOINT_URL') or '').rstrip('/')
+        raw = (os.getenv('SUPABASE_URL') or os.getenv('ASHES_S3_ENDPOINT_URL') or '').strip().rstrip('/')
         if not raw:
             raise RuntimeError('Supabase URL is not configured')
         parsed = urlparse(raw)
@@ -117,8 +118,8 @@ class SupabaseStorage(StorageBackend):
             self.base_url = f"https://{project_ref}.supabase.co"
         else:
             self.base_url = f"{parsed.scheme or 'https'}://{host}" if host else raw
-        self.service_key = os.environ['SUPABASE_SERVICE_ROLE_KEY']
-        self.bucket = os.environ['SUPABASE_STORAGE_BUCKET']
+        self.service_key = os.environ['SUPABASE_SERVICE_ROLE_KEY'].strip()
+        self.bucket = os.environ['SUPABASE_STORAGE_BUCKET'].strip()
 
     def _headers(self, content_type: Optional[str] = None) -> dict[str, str]:
         headers = {
