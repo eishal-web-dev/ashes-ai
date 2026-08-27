@@ -166,12 +166,12 @@ def shopify_billing_url() -> JSONResponse:
 
 @app.get("/api/shopify/app-pricing/sync")
 def shopify_app_pricing_sync(plan_handle: str, shop: str | None = None):
-    verified = _sync_managed_plan(plan_handle, shop)
+    _sync_managed_plan(plan_handle, shop)
     return RedirectResponse(_embedded_app_url(shop), status_code=302)
 
 
 _INJECT = r'''
-<!-- ASHES_SHOPIFY_APP_PRICING_V4 -->
+<!-- ASHES_SHOPIFY_APP_PRICING_V5 -->
 <style>
 .ashes-plan-action{display:block;margin-top:14px;width:100%;text-align:center;text-decoration:none;border-radius:11px;padding:10px 12px;font-weight:800;background:#f3f3f3;color:#090909}
 .ashes-plan-action:hover{opacity:.9}.ashes-plan-note{margin-top:8px;color:#747474;font-size:11px;line-height:1.4}
@@ -247,12 +247,19 @@ class ShopifyPricingLiveMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/api/shopify/app":
             plan_handle = request.query_params.get("plan_handle")
             shop_param = request.query_params.get("shop")
+            embedded = request.query_params.get("embedded") == "1"
+
+            # Shopify App Pricing can return to the app's raw App URL outside the
+            # Admin iframe. Sync the chosen plan if present, then always bounce that
+            # top-level return straight back into the embedded Shopify Admin app.
             if plan_handle:
                 try:
                     _sync_managed_plan(plan_handle, shop_param)
-                    return RedirectResponse(_embedded_app_url(shop_param), status_code=302)
                 except Exception as exc:
                     print(f"ASHES_SHOPIFY_APP_PRICING_SYNC_FAILED plan={plan_handle} error={exc}")
+            if not embedded:
+                return RedirectResponse(_embedded_app_url(shop_param), status_code=302)
+
         response = await call_next(request)
         if request.url.path != "/api/shopify/app" or response.status_code != 200:
             return response
@@ -262,7 +269,7 @@ class ShopifyPricingLiveMiddleware(BaseHTTPMiddleware):
         async for chunk in response.body_iterator:
             body += chunk
         text = body.decode("utf-8", errors="replace")
-        if "ASHES_SHOPIFY_APP_PRICING_V4" not in text:
+        if "ASHES_SHOPIFY_APP_PRICING_V5" not in text:
             text = text.replace("</body>", _INJECT + "</body>")
         headers = dict(response.headers)
         headers.pop("content-length", None)
