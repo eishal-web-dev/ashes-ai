@@ -5,7 +5,7 @@ from typing import Any
 
 import requests
 from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
@@ -45,6 +45,10 @@ def _app_handle() -> str:
 
 def _pricing_url(shop: str | None = None) -> str:
     return f"https://admin.shopify.com/store/{_store_handle(shop)}/charges/{_app_handle()}/pricing_plans"
+
+
+def _embedded_app_url(shop: str | None = None) -> str:
+    return f"https://admin.shopify.com/store/{_store_handle(shop)}/apps/{_app_handle()}"
 
 
 def _partner_org_id() -> str:
@@ -161,13 +165,13 @@ def shopify_billing_url() -> JSONResponse:
 
 
 @app.get("/api/shopify/app-pricing/sync")
-def shopify_app_pricing_sync(plan_handle: str, shop: str | None = None) -> JSONResponse:
+def shopify_app_pricing_sync(plan_handle: str, shop: str | None = None):
     verified = _sync_managed_plan(plan_handle, shop)
-    return JSONResponse({"ok": True, "plan": verified, "provider": "shopify_app_pricing"}, headers={"Cache-Control": "no-store"})
+    return RedirectResponse(_embedded_app_url(shop), status_code=302)
 
 
 _INJECT = r'''
-<!-- ASHES_SHOPIFY_APP_PRICING_V3 -->
+<!-- ASHES_SHOPIFY_APP_PRICING_V4 -->
 <style>
 .ashes-plan-action{display:block;margin-top:14px;width:100%;text-align:center;text-decoration:none;border-radius:11px;padding:10px 12px;font-weight:800;background:#f3f3f3;color:#090909}
 .ashes-plan-action:hover{opacity:.9}.ashes-plan-note{margin-top:8px;color:#747474;font-size:11px;line-height:1.4}
@@ -246,6 +250,7 @@ class ShopifyPricingLiveMiddleware(BaseHTTPMiddleware):
             if plan_handle:
                 try:
                     _sync_managed_plan(plan_handle, shop_param)
+                    return RedirectResponse(_embedded_app_url(shop_param), status_code=302)
                 except Exception as exc:
                     print(f"ASHES_SHOPIFY_APP_PRICING_SYNC_FAILED plan={plan_handle} error={exc}")
         response = await call_next(request)
@@ -257,7 +262,7 @@ class ShopifyPricingLiveMiddleware(BaseHTTPMiddleware):
         async for chunk in response.body_iterator:
             body += chunk
         text = body.decode("utf-8", errors="replace")
-        if "ASHES_SHOPIFY_APP_PRICING_V3" not in text:
+        if "ASHES_SHOPIFY_APP_PRICING_V4" not in text:
             text = text.replace("</body>", _INJECT + "</body>")
         headers = dict(response.headers)
         headers.pop("content-length", None)
