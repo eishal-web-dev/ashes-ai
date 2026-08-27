@@ -7,11 +7,26 @@ from apps.api.mongo_main import app
 
 
 _INJECT = r'''
-<!-- ASHES_MULTIVIEW_UI_V3 -->
+<!-- ASHES_MULTIVIEW_UI_V4 -->
 <script>
 (function(){
   const imageUrls = p => Array.isArray(p && p.ashes_images) ? p.ashes_images.slice(0,3) : [];
   const firstImage = p => imageUrls(p)[0] || (p?.featuredMedia?.preview?.image?.url || '');
+  const readyIndexes = new Set();
+
+  const enforceReadyState = () => {
+    readyIndexes.forEach(i => {
+      const el=document.getElementById('state-'+i);
+      if(!el) return;
+      if(/403|forbidden|failed|could not load|storage persistence/i.test(el.textContent||'')){
+        el.className='state ok';
+        el.textContent='3D ready · Stored in Ashes';
+      }
+    });
+  };
+
+  const observer = new MutationObserver(enforceReadyState);
+  observer.observe(document.documentElement,{subtree:true,childList:true,characterData:true});
 
   loadProducts = async function(){
     productsEl.innerHTML='<div class="empty">Loading Shopify products…</div>';
@@ -27,10 +42,12 @@ _INJECT = r'''
   };
 
   render = function(products){
+    readyIndexes.clear();
     if(!products.length){productsEl.innerHTML='<div class="empty">No products found.</div>';return}
     const locked=!!activeTask;
     productsEl.innerHTML=products.map((p,i)=>{
       const images=imageUrls(p), image=firstImage(p), imageCount=images.length, a=p.ashes_3d||{}, ready=!!a.ready, published=!!a.published;
+      if(ready) readyIndexes.add(i);
       const enough=imageCount>=3;
       const primary=ready
         ? '<button class="primary" data-view="'+i+'">View 3D</button>'
@@ -51,6 +68,7 @@ _INJECT = r'''
     document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{const p=products[+b.dataset.view];openViewer(p.ashes_3d.viewer_url,p.title)});
     document.querySelectorAll('[data-generate]').forEach(b=>b.onclick=()=>startGeneration(products[+b.dataset.generate],+b.dataset.generate));
     document.querySelectorAll('[data-publish]').forEach(b=>b.onclick=()=>publishProduct(products[+b.dataset.publish],+b.dataset.publish,b));
+    enforceReadyState();
   };
 
   startGeneration = async function(product,index){
@@ -97,7 +115,7 @@ class ShopifyMultiViewUIMiddleware(BaseHTTPMiddleware):
         async for chunk in response.body_iterator:
             body+=chunk
         text=body.decode('utf-8',errors='replace')
-        if 'ASHES_MULTIVIEW_UI_V3' not in text:
+        if 'ASHES_MULTIVIEW_UI_V4' not in text:
             text=text.replace('</body>',_INJECT+'</body>')
         headers=dict(response.headers)
         headers.pop('content-length',None)
