@@ -27,7 +27,6 @@ import apps.api.shopify_routes  # noqa: F401
 import apps.api.shopify_generation  # noqa: F401
 import apps.api.shopify_multiview  # noqa: F401
 import apps.api.shopify_pricing_live  # noqa: F401
-import apps.api.shopify_native_billing  # noqa: F401
 import apps.api.shopify_glb_quality  # noqa: F401
 import apps.api.shopify_model_url_persistence  # noqa: F401
 import apps.api.shopify_publish  # noqa: F401
@@ -42,7 +41,6 @@ import apps.api.shopify_multiview_recovery  # noqa: F401
 import apps.api.shopify_completed_error_cleanup  # noqa: F401
 import apps.api.shopify_session_auth  # noqa: F401
 import apps.api.shopify_force_multiview  # noqa: F401
-import apps.api.shopify_billing_click_fix  # noqa: F401
 from apps.api.mongo_db import database
 
 
