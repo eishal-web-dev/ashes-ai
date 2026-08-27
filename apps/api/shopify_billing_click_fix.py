@@ -7,7 +7,7 @@ from apps.api.mongo_main import app
 
 
 _INJECT = r'''
-<!-- ASHES_BILLING_CLICK_FIX_V2 -->
+<!-- ASHES_BILLING_CLICK_FIX_V3 -->
 <style>
 .ashes-checkout-btn{display:block;margin-top:14px;width:100%;text-align:center;border:0;border-radius:11px;padding:11px 12px;font-weight:800;background:#f3f3f3;color:#090909;cursor:pointer}
 .ashes-checkout-btn:hover{opacity:.9}.ashes-checkout-btn:disabled{opacity:.55;cursor:wait}
@@ -31,7 +31,6 @@ _INJECT = r'''
     cards.forEach((card, index) => {
       const plan = data.plans[index] || data.plans.find(p => p.key === ORDER[index]);
       if(!plan || card.querySelector('.ashes-checkout-btn')) return;
-      // Remove the older non-working injected action if present.
       card.querySelectorAll('.ashes-plan-action').forEach(el => el.remove());
       if(plan.key === current || plan.key === 'trial') return;
 
@@ -43,6 +42,20 @@ _INJECT = r'''
       btn.textContent = plan.key === 'enterprise' ? 'Contact Ashes' : 'Choose ' + plan.name;
       card.appendChild(btn);
     });
+  }
+
+  function leaveIframe(url){
+    // Directly assigning href is permitted for top-level navigation from an embedded app;
+    // reading/calling methods like top.location.assign is blocked by cross-origin policy.
+    try {
+      window.top.location.href = url;
+      return;
+    } catch (_) {}
+    try {
+      window.open(url, '_top');
+      return;
+    } catch (_) {}
+    window.location.href = url;
   }
 
   async function startCheckout(button){
@@ -66,9 +79,7 @@ _INJECT = r'''
       }
       const url = data.confirmation_url || data.url;
       if(!url) throw new Error('Shopify did not return a checkout URL for ' + name);
-      // Embedded apps must escape the iframe for Shopify's billing approval screen.
-      if(window.top) window.top.location.assign(url);
-      else window.location.assign(url);
+      leaveIframe(url);
     } catch (error) {
       button.disabled = false;
       button.textContent = original;
@@ -103,7 +114,15 @@ class ShopifyBillingClickFixMiddleware(BaseHTTPMiddleware):
         async for chunk in response.body_iterator:
             body += chunk
         text = body.decode('utf-8', errors='replace')
-        if 'ASHES_BILLING_CLICK_FIX_V2' not in text:
+        # Replace the previous injected version if present so old cached HTML cannot keep using location.assign.
+        if 'ASHES_BILLING_CLICK_FIX_V2' in text:
+            start = text.find('<!-- ASHES_BILLING_CLICK_FIX_V2 -->')
+            if start != -1:
+                end = text.find('</script>', start)
+                if end != -1:
+                    end += len('</script>')
+                    text = text[:start] + _INJECT + text[end:]
+        elif 'ASHES_BILLING_CLICK_FIX_V3' not in text:
             text = text.replace('</body>', _INJECT + '</body>')
         headers = dict(response.headers)
         headers.pop('content-length', None)
