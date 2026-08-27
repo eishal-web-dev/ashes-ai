@@ -73,19 +73,38 @@ class S3Storage(StorageBackend):
                 signature_version='s3v4',
                 request_checksum_calculation='when_required',
                 response_checksum_validation='when_required',
-                s3={'addressing_style': 'path'},
+                s3={'addressing_style': 'path', 'payload_signing_enabled': True},
             ),
         )
 
     def put_file(self, source: Path, key: str, content_type: Optional[str] = None) -> str:
+        from botocore.exceptions import ClientError
+
+        data = source.read_bytes()
         kwargs = {
             'Bucket': self.bucket,
             'Key': key,
-            'Body': source.read_bytes(),
+            'Body': data,
+            'ContentLength': len(data),
         }
         if content_type:
             kwargs['ContentType'] = content_type
-        self.client.put_object(**kwargs)
+        try:
+            self.client.put_object(**kwargs)
+        except ClientError as exc:
+            response = getattr(exc, 'response', {}) or {}
+            error = response.get('Error') or {}
+            meta = response.get('ResponseMetadata') or {}
+            code = error.get('Code') or '<empty>'
+            message = error.get('Message') or '<empty>'
+            status = meta.get('HTTPStatusCode')
+            request_id = meta.get('RequestId')
+            headers = meta.get('HTTPHeaders') or {}
+            raise RuntimeError(
+                f"S3 PutObject failed status={status} code={code} message={message} "
+                f"request_id={request_id} content_length={len(data)} "
+                f"server={headers.get('server')} content_type={headers.get('content-type')}"
+            ) from exc
         return key
 
     def delete(self, key_or_path: str) -> None:
