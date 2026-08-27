@@ -27,8 +27,11 @@ def _repair_asset_from_job(product_id: str) -> dict[str, Any] | None:
     status = str(job.get("status") or "").upper()
 
     # A browser refresh can happen after Modal finishes but before the polling
-    # request persisted the GLB. Reconcile the worker once more on demand.
-    if task_id and status not in {"FAILED", "CANCELLED", "STORAGE_FAILED", "QUALITY_FAILED"} and not job.get("model_path"):
+    # request persisted the GLB. STORAGE_FAILED is intentionally retryable here:
+    # the expensive GPU work already completed, so after storage credentials are
+    # repaired we should ask Modal for the same completed result and persist it
+    # again instead of launching another generation.
+    if task_id and status not in {"FAILED", "CANCELLED", "QUALITY_FAILED"} and not job.get("model_path"):
         try:
             worker_data = _worker_status(task_id)
             _finish_job(task_id, worker_data)
