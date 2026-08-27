@@ -44,6 +44,31 @@ def _modal_recovery_url() -> str:
     ).strip().rstrip("/")
 
 
+def _s3_client():
+    import boto3
+    from botocore.config import Config
+
+    endpoint = (os.getenv("ASHES_S3_ENDPOINT_URL") or "").strip() or None
+    region = (os.getenv("ASHES_S3_REGION") or "auto").strip()
+    access_key = (os.getenv("ASHES_S3_ACCESS_KEY_ID") or "").strip()
+    secret_key = (os.getenv("ASHES_S3_SECRET_ACCESS_KEY") or "").strip()
+    if not access_key or not secret_key:
+        raise RuntimeError("S3 credentials are not configured")
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        region_name=region,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        config=Config(
+            signature_version="s3v4",
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+            s3={"addressing_style": "path"},
+        ),
+    )
+
+
 @app.get("/api/shopify/viewer/{product_id:path}", response_class=HTMLResponse)
 def shopify_3d_viewer_path(product_id: str) -> HTMLResponse:
     _require_connected()
@@ -72,22 +97,61 @@ def shopify_3d_model_path(product_id: str) -> StreamingResponse:
     if not asset or not bool(asset.get("storefront_enabled", True)):
         raise HTTPException(status_code=404, detail="This Ashes 3D product is not available.")
 
-    model_path = str(asset.get("model_path") or "")
-    headers: dict[str, str] = {}
+    model_path = str(asset.get("model_path") or "").lstrip("/")
+    if not model_path:
+        raise HTTPException(status_code=404, detail="Stored model is unavailable.")
+
     if model_path.startswith("modal-recovery://"):
         model_id = model_path.split("modal-recovery://", 1)[1].strip()
         if not model_id:
             raise HTTPException(status_code=404, detail="Recovered 3D model is unavailable.")
         source = f"{_modal_recovery_url()}/v1/files/{model_id}/model.glb"
-        headers = _modal_headers()
-    else:
-        source = media_url(API_BASE_URL, model_path)
+        try:
+            upstream = requests.get(source, headers=_modal_headers(), timeout=60, stream=True)
+            upstream.raise_for_status()
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=f"Ashes could not load this recovered 3D asset: {str(exc)[:180]}") from exc
 
+        def modal_body():
+            try:
+                for chunk in upstream.iter_content(1024 * 256):
+                    if chunk:
+                        yield chunk
+            finally:
+                upstream.close()
+
+        return StreamingResponse(
+            modal_body(),
+            media_type="model/gltf-binary",
+            headers={"Cache-Control": "private, max-age=300", "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff"},
+        )
+
+    provider = (os.getenv("ASHES_STORAGE_PROVIDER") or "local").strip().lower()
+    if provider in {"s3", "r2", "supabase-s3"}:
+        bucket = (os.getenv("ASHES_S3_BUCKET") or "").strip()
+        if not bucket:
+            raise HTTPException(status_code=500, detail="Ashes S3 bucket is not configured.")
+        try:
+            obj = _s3_client().get_object(Bucket=bucket, Key=model_path)
+            stream = obj["Body"]
+            length = obj.get("ContentLength")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Ashes could not load the stored GLB from S3: {str(exc)[:220]}") from exc
+
+        headers = {
+            "Cache-Control": "private, max-age=300",
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if length is not None:
+            headers["Content-Length"] = str(length)
+        return StreamingResponse(stream.iter_chunks(chunk_size=1024 * 256), media_type="model/gltf-binary", headers=headers)
+
+    source = media_url(API_BASE_URL, model_path)
     if not source:
         raise HTTPException(status_code=404, detail="Stored model is unavailable.")
-
     try:
-        upstream = requests.get(source, headers=headers, timeout=60, stream=True)
+        upstream = requests.get(source, timeout=60, stream=True)
         upstream.raise_for_status()
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Ashes could not load this stored 3D asset: {str(exc)[:180]}") from exc
@@ -103,9 +167,5 @@ def shopify_3d_model_path(product_id: str) -> StreamingResponse:
     return StreamingResponse(
         body(),
         media_type="model/gltf-binary",
-        headers={
-            "Cache-Control": "private, max-age=300",
-            "Content-Disposition": "inline",
-            "X-Content-Type-Options": "nosniff",
-        },
+        headers={"Cache-Control": "private, max-age=300", "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff"},
     )
