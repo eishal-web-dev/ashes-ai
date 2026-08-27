@@ -37,6 +37,7 @@ import apps.api.shopify_asset_startup  # noqa: F401
 import apps.api.shopify_publish_click_fix  # noqa: F401
 import apps.api.shopify_multiview_ui  # noqa: F401
 import apps.api.shopify_multiview_recovery  # noqa: F401
+import apps.api.shopify_completed_error_cleanup  # noqa: F401
 import apps.api.shopify_session_auth  # noqa: F401
 import apps.api.shopify_force_multiview  # noqa: F401
 from apps.api.mongo_db import database
