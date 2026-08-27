@@ -8,16 +8,16 @@ from starlette.responses import Response
 
 from apps.api.mongo_db import collection, now_iso
 from apps.api.mongo_main import app
-from apps.api.shopify_generation import _asset, _finish_job, _shop, _worker_status
+import apps.api.shopify_generation as generation
 
 
 def _repair_asset_from_job(product_id: str) -> dict[str, Any] | None:
-    existing = _asset(product_id)
+    existing = generation._asset(product_id)
     if existing:
         return existing
 
     job = collection("shopify_generation_jobs").find_one(
-        {"shop": _shop(), "product_id": product_id},
+        {"shop": generation._shop(), "product_id": product_id},
         sort=[("created_at", -1)],
     )
     if not job:
@@ -25,20 +25,44 @@ def _repair_asset_from_job(product_id: str) -> dict[str, Any] | None:
 
     task_id = str(job.get("task_id") or "").strip()
     status = str(job.get("status") or "").upper()
+    model_url = str(job.get("model_url") or "").strip()
 
-    # A browser refresh can happen after Modal finishes but before the polling
-    # request persisted the GLB. STORAGE_FAILED is intentionally retryable here:
-    # the expensive GPU work already completed, so after storage credentials are
-    # repaired we should ask Modal for the same completed result and persist it
-    # again instead of launching another generation.
+    # If Modal already finished and only storage failed, retry the saved GLB URL
+    # directly. This performs zero new GPU work.
+    if task_id and status == "STORAGE_FAILED" and model_url and not job.get("model_path"):
+        try:
+            print(f"ASHES_SHOPIFY_STORAGE_RETRY product={product_id} task={task_id} source=saved_model_url")
+            generation._finish_job(
+                task_id,
+                {
+                    "status": "SUCCEEDED",
+                    "stage": "RETRYING_STORAGE",
+                    "progress": 100,
+                    "model_url": model_url,
+                },
+            )
+        except Exception as exc:
+            print(f"ASHES_SHOPIFY_STORAGE_RETRY_FAILED product={product_id} task={task_id} error={str(exc)[:500]}")
+        job = collection("shopify_generation_jobs").find_one(
+            {"shop": generation._shop(), "product_id": product_id},
+            sort=[("created_at", -1)],
+        ) or job
+
+    status = str(job.get("status") or "").upper()
+    model_url = str(job.get("model_url") or "").strip()
+
+    # Older failed jobs may predate durable model_url storage. Ask Modal for the
+    # same task once; if it still exists, _finish_job now records model_url before
+    # attempting storage so all future retries are durable.
     if task_id and status not in {"FAILED", "CANCELLED", "QUALITY_FAILED"} and not job.get("model_path"):
         try:
-            worker_data = _worker_status(task_id)
-            _finish_job(task_id, worker_data)
-        except Exception:
-            pass
+            print(f"ASHES_SHOPIFY_RECOVERY_POLL product={product_id} task={task_id} status={status}")
+            worker_data = generation._worker_status(task_id)
+            generation._finish_job(task_id, worker_data)
+        except Exception as exc:
+            print(f"ASHES_SHOPIFY_RECOVERY_POLL_FAILED product={product_id} task={task_id} error={str(exc)[:500]}")
         job = collection("shopify_generation_jobs").find_one(
-            {"shop": _shop(), "product_id": product_id},
+            {"shop": generation._shop(), "product_id": product_id},
             sort=[("created_at", -1)],
         ) or job
 
@@ -46,10 +70,8 @@ def _repair_asset_from_job(product_id: str) -> dict[str, Any] | None:
     if str(job.get("status") or "").upper() != "COMPLETED" or not model_path:
         return None
 
-    # Self-heal the canonical asset row from the completed job. This makes the
-    # twin permanent and prevents a second GPU generation for the same product.
     doc = {
-        "shop": _shop(),
+        "shop": generation._shop(),
         "product_id": product_id,
         "product_name": job.get("product_name"),
         "model_path": model_path,
@@ -59,11 +81,12 @@ def _repair_asset_from_job(product_id: str) -> dict[str, Any] | None:
         "recovered_from_job": True,
     }
     collection("shopify_3d_assets").update_one(
-        {"shop": _shop(), "product_id": product_id},
+        {"shop": generation._shop(), "product_id": product_id},
         {"$set": doc, "$setOnInsert": {"created_at": now_iso()}},
         upsert=True,
     )
-    return _asset(product_id)
+    print(f"ASHES_SHOPIFY_RECOVERED product={product_id} task={task_id}")
+    return generation._asset(product_id)
 
 
 class ShopifyMultiViewRecoveryMiddleware(BaseHTTPMiddleware):
