@@ -30,6 +30,7 @@ import apps.api.shopify_pricing_live  # noqa: F401
 import apps.api.shopify_glb_quality  # noqa: F401
 import apps.api.shopify_model_url_persistence  # noqa: F401
 import apps.api.shopify_publish  # noqa: F401
+import apps.api.shopify_publish_s3_fix  # noqa: F401
 import apps.api.shopify_compliance_webhooks  # noqa: F401
 import apps.api.modal_recovery_proxy  # noqa: F401
 import apps.api.shopify_viewer_paths  # noqa: F401
