@@ -16,63 +16,14 @@ import apps.api.shopify_generation as generation
 
 
 LIVE_SHOPIFY_PLANS: list[dict[str, Any]] = [
-    {
-        "key": "trial",
-        "name": "Free Trial",
-        "price": "$0",
-        "generation_allowance": 2,
-        "generation_period": "total",
-        "active_product_guideline": 3,
-        "features": ["2 total 3D generations", "3D + AR", "Reusable GLB assets", "Shopify integration"],
-    },
-    {
-        "key": "starter",
-        "name": "Starter",
-        "price": "$7.99/mo",
-        "generation_allowance": 5,
-        "generation_period": "month",
-        "active_product_guideline": 15,
-        "features": ["5 new twins / month", "~15 active 3D products", "3D + AR", "Reusable assets"],
-    },
-    {
-        "key": "growth",
-        "name": "Growth",
-        "price": "$17.99/mo",
-        "generation_allowance": 20,
-        "generation_period": "month",
-        "active_product_guideline": 50,
-        "features": ["20 new twins / month", "~50 active 3D products", "3D + AR", "Cross-channel reuse"],
-    },
-    {
-        "key": "pro",
-        "name": "Pro",
-        "price": "$39.99/mo",
-        "generation_allowance": 75,
-        "generation_period": "month",
-        "active_product_guideline": 250,
-        "features": ["75 new twins / month", "~250 active 3D products", "Priority generation", "3D + AR"],
-    },
-    {
-        "key": "business",
-        "name": "Business",
-        "price": "$79.99/mo",
-        "generation_allowance": 200,
-        "generation_period": "month",
-        "active_product_guideline": 700,
-        "features": ["200 new twins / month", "Large catalogs", "Priority generation", "3D + AR"],
-    },
-    {
-        "key": "enterprise",
-        "name": "Enterprise",
-        "price": "Custom",
-        "generation_allowance": None,
-        "generation_period": "custom",
-        "active_product_guideline": "Custom",
-        "features": ["Custom catalog allowance", "API access", "Bulk workflows", "SLA / dedicated capacity"],
-    },
+    {"key": "trial", "name": "Free Trial", "price": "$0", "generation_allowance": 2, "generation_period": "total", "active_product_guideline": 3, "features": ["2 total 3D generations", "3D + AR", "Reusable GLB assets", "Shopify integration"]},
+    {"key": "starter", "name": "Starter", "price": "$7.99/mo", "generation_allowance": 5, "generation_period": "month", "active_product_guideline": 15, "features": ["5 new twins / month", "~15 active 3D products", "3D + AR", "Reusable assets"]},
+    {"key": "growth", "name": "Growth", "price": "$17.99/mo", "generation_allowance": 20, "generation_period": "month", "active_product_guideline": 50, "features": ["20 new twins / month", "~50 active 3D products", "3D + AR", "Cross-channel reuse"]},
+    {"key": "pro", "name": "Pro", "price": "$39.99/mo", "generation_allowance": 75, "generation_period": "month", "active_product_guideline": 250, "features": ["75 new twins / month", "~250 active 3D products", "Priority generation", "3D + AR"]},
+    {"key": "business", "name": "Business", "price": "$79.99/mo", "generation_allowance": 200, "generation_period": "month", "active_product_guideline": 700, "features": ["200 new twins / month", "Large catalogs", "Priority generation", "3D + AR"]},
+    {"key": "enterprise", "name": "Enterprise", "price": "Custom", "generation_allowance": None, "generation_period": "custom", "active_product_guideline": "Custom", "features": ["Custom catalog allowance", "API access", "Bulk workflows", "SLA / dedicated capacity"]},
 ]
 
-# One catalog for UI and generation enforcement.
 generation.SHOPIFY_PLANS[:] = LIVE_SHOPIFY_PLANS
 
 
@@ -148,14 +99,8 @@ def _active_app_pricing_subscription() -> dict[str, Any] | None:
     url = f"https://partners.shopify.com/{_partner_org_id()}/api/2026-07/graphql.json"
     response = requests.post(
         url,
-        headers={
-            "Content-Type": "application/json",
-            "X-Shopify-Access-Token": _partner_token(),
-        },
-        json={
-            "query": query,
-            "variables": {"appId": _partner_app_id(), "shopId": _shop_gid()},
-        },
+        headers={"Content-Type": "application/json", "X-Shopify-Access-Token": _partner_token()},
+        json={"query": query, "variables": {"appId": _partner_app_id(), "shopId": _shop_gid()}},
         timeout=20,
     )
     response.raise_for_status()
@@ -172,15 +117,9 @@ def _verified_plan_handle(subscription: dict[str, Any] | None, requested: str) -
     requested = requested.strip().lower()
     if requested not in valid:
         return None
-
-    # Shopify App Pricing identifies the chosen plan through plan_handle on redirect.
-    # The Active Subscription API is the source of truth; for fixed-price plans, the
-    # recurring subscription item handle is used to confirm the same configured handle.
     handles = {str(item.get("handle") or "").strip().lower() for item in subscription.get("items") or []}
     if requested in handles:
         return requested
-
-    # Defensive fallback: verify by the exact fixed monthly amount configured in Ashes.
     expected = _plan(requested)
     expected_amount = float(str(expected["price"]).replace("$", "").replace("/mo", ""))
     for item in subscription.get("items") or []:
@@ -202,31 +141,14 @@ def _sync_managed_plan(plan_handle: str, shop_param: str | None = None) -> str:
     expected_shop = _shop().strip().lower()
     if shop_param and shop_param.strip().lower() != expected_shop:
         raise HTTPException(status_code=400, detail="Shop mismatch in Shopify App Pricing redirect")
-
     subscription = _active_app_pricing_subscription()
     verified = _verified_plan_handle(subscription, requested)
     if verified != requested:
         raise HTTPException(status_code=402, detail="Shopify App Pricing subscription could not be verified")
-
     cycle = (subscription or {}).get("currentBillingCycle") or {}
     collection("shopify_accounts").update_one(
         {"shop": expected_shop},
-        {
-            "$set": {
-                "shop": expected_shop,
-                "plan_key": requested,
-                "billing_provider": "shopify_app_pricing",
-                "shopify_plan_handle": requested,
-                "shopify_billing_period": (subscription or {}).get("billingPeriod"),
-                "shopify_billing_cycle_start": cycle.get("startTime"),
-                "shopify_billing_cycle_end": cycle.get("endTime"),
-                "shopify_cancel_at_end_of_cycle": bool((subscription or {}).get("cancelAtEndOfCycle")),
-                "shopify_legacy_subscription_id": (subscription or {}).get("legacySubscriptionId"),
-                "billing_activated_at": now_iso(),
-                "updated_at": now_iso(),
-            },
-            "$setOnInsert": {"created_at": now_iso(), "connected": True},
-        },
+        {"$set": {"shop": expected_shop, "plan_key": requested, "billing_provider": "shopify_app_pricing", "shopify_plan_handle": requested, "shopify_billing_period": (subscription or {}).get("billingPeriod"), "shopify_billing_cycle_start": cycle.get("startTime"), "shopify_billing_cycle_end": cycle.get("endTime"), "shopify_cancel_at_end_of_cycle": bool((subscription or {}).get("cancelAtEndOfCycle")), "shopify_legacy_subscription_id": (subscription or {}).get("legacySubscriptionId"), "billing_activated_at": now_iso(), "updated_at": now_iso()}, "$setOnInsert": {"created_at": now_iso(), "connected": True}},
         upsert=True,
     )
     print(f"ASHES_SHOPIFY_APP_PRICING_SYNC shop={expected_shop} plan={requested}")
@@ -235,16 +157,7 @@ def _sync_managed_plan(plan_handle: str, shop_param: str | None = None) -> str:
 
 @app.get("/api/shopify/billing-url")
 def shopify_billing_url() -> JSONResponse:
-    return JSONResponse(
-        {
-            "provider": "shopify_app_pricing",
-            "shop": _shop(),
-            "app_handle": _app_handle(),
-            "url": _pricing_url(),
-            "plans": LIVE_SHOPIFY_PLANS,
-        },
-        headers={"Cache-Control": "no-store"},
-    )
+    return JSONResponse({"provider": "shopify_app_pricing", "shop": _shop(), "app_handle": _app_handle(), "url": _pricing_url(), "plans": LIVE_SHOPIFY_PLANS}, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/shopify/app-pricing/sync")
@@ -254,7 +167,7 @@ def shopify_app_pricing_sync(plan_handle: str, shop: str | None = None) -> JSONR
 
 
 _INJECT = r'''
-<!-- ASHES_SHOPIFY_APP_PRICING_V2 -->
+<!-- ASHES_SHOPIFY_APP_PRICING_V3 -->
 <style>
 .ashes-plan-action{display:block;margin-top:14px;width:100%;text-align:center;text-decoration:none;border-radius:11px;padding:10px 12px;font-weight:800;background:#f3f3f3;color:#090909}
 .ashes-plan-action:hover{opacity:.9}.ashes-plan-note{margin-top:8px;color:#747474;font-size:11px;line-height:1.4}
@@ -291,16 +204,24 @@ _INJECT = r'''
     const current = (data.current_plan || {}).key;
     cards.forEach((card, i) => {
       const plan = data.plans[i];
-      if (!plan || card.querySelector('.ashes-plan-action')) return;
+      if (!plan) return;
       card.querySelectorAll('.ashes-checkout-btn').forEach(el => el.remove());
       if (plan.key === current) {
-        const note = document.createElement('div');
-        note.className = 'ashes-plan-note';
-        note.textContent = 'Your current Ashes plan';
-        card.appendChild(note);
+        card.querySelectorAll('.ashes-plan-action').forEach(el => el.remove());
+        if (!card.querySelector('.ashes-plan-note')) {
+          const note = document.createElement('div');
+          note.className = 'ashes-plan-note';
+          note.textContent = 'Your current Ashes plan';
+          card.appendChild(note);
+        }
         return;
       }
-      if (plan.key === 'trial') return;
+      card.querySelectorAll('.ashes-plan-note').forEach(el => el.remove());
+      if (plan.key === 'trial') {
+        card.querySelectorAll('.ashes-plan-action').forEach(el => el.remove());
+        return;
+      }
+      if (card.querySelector('.ashes-plan-action')) return;
       const a = document.createElement('a');
       a.href = '#';
       a.className = 'ashes-plan-action';
@@ -309,8 +230,9 @@ _INJECT = r'''
       card.appendChild(a);
     });
   }
-  setInterval(decorate, 400);
+  const timer = setInterval(decorate, 400);
   decorate();
+  window.addEventListener('beforeunload', () => clearInterval(timer), {once:true});
 })();
 </script>
 '''
@@ -318,8 +240,6 @@ _INJECT = r'''
 
 class ShopifyPricingLiveMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Shopify App Pricing appends plan_handle (and shop for external URLs)
-        # after a merchant confirms a plan. Verify before rendering paid access.
         if request.url.path == "/api/shopify/app":
             plan_handle = request.query_params.get("plan_handle")
             shop_param = request.query_params.get("shop")
@@ -328,20 +248,17 @@ class ShopifyPricingLiveMiddleware(BaseHTTPMiddleware):
                     _sync_managed_plan(plan_handle, shop_param)
                 except Exception as exc:
                     print(f"ASHES_SHOPIFY_APP_PRICING_SYNC_FAILED plan={plan_handle} error={exc}")
-
         response = await call_next(request)
         if request.url.path != "/api/shopify/app" or response.status_code != 200:
             return response
         if "text/html" not in response.headers.get("content-type", ""):
             return response
-
         body = b""
         async for chunk in response.body_iterator:
             body += chunk
         text = body.decode("utf-8", errors="replace")
-        if "ASHES_SHOPIFY_APP_PRICING_V2" not in text:
+        if "ASHES_SHOPIFY_APP_PRICING_V3" not in text:
             text = text.replace("</body>", _INJECT + "</body>")
-
         headers = dict(response.headers)
         headers.pop("content-length", None)
         headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
