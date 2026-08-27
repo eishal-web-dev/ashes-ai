@@ -64,15 +64,27 @@ class S3Storage(StorageBackend):
             region_name=region,
             aws_access_key_id=os.getenv('ASHES_S3_ACCESS_KEY_ID'),
             aws_secret_access_key=os.getenv('ASHES_S3_SECRET_ACCESS_KEY'),
-            config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
+            config=Config(
+                signature_version='s3v4',
+                request_checksum_calculation='when_required',
+                response_checksum_validation='when_required',
+                s3={'addressing_style': 'path'},
+            ),
         )
 
     def put_file(self, source: Path, key: str, content_type: Optional[str] = None) -> str:
-        extra = {'ContentType': content_type} if content_type else None
-        if extra:
-            self.client.upload_file(str(source), self.bucket, key, ExtraArgs=extra)
-        else:
-            self.client.upload_file(str(source), self.bucket, key)
+        # Supabase's S3-compatible endpoint supports standard PutObject. Using a
+        # direct single-request upload avoids boto3's managed-transfer extras
+        # (multipart/checksum negotiation) that some S3-compatible providers do
+        # not implement exactly like AWS S3.
+        kwargs = {
+            'Bucket': self.bucket,
+            'Key': key,
+            'Body': source.read_bytes(),
+        }
+        if content_type:
+            kwargs['ContentType'] = content_type
+        self.client.put_object(**kwargs)
         return key
 
     def delete(self, key_or_path: str) -> None:
