@@ -12,12 +12,26 @@ from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from apps.api.mongo_main import app
+from apps.api.shopify_request_context import (
+    normalize_shop,
+    reset_id_token,
+    reset_shop,
+    set_id_token,
+    set_shop,
+)
 
 
+# App Home itself must stay public so Shopify can render the shell. All data and
+# merchant actions are authenticated with the App Bridge ID token.
 _PROTECTED_PREFIXES = (
     "/api/shopify/products",
+    "/api/shopify/products-multiview",
     "/api/shopify/plans",
+    "/api/shopify/billing-url",
+    "/api/shopify/app-pricing/cancel",
     "/api/shopify/generate-3d",
+    "/api/shopify/generate-3d-multiview",
+    "/api/shopify/generation",
     "/api/shopify/publish-3d",
     "/api/shopify/assets",
 )
@@ -36,7 +50,6 @@ def verify_shopify_session_token(token: str) -> dict:
     header_b64, payload_b64, signature_b64 = parts
     secret = (os.getenv("SHOPIFY_CLIENT_SECRET") or os.getenv("ASHES_SHOPIFY_CLIENT_SECRET") or "").strip()
     client_id = (os.getenv("SHOPIFY_CLIENT_ID") or os.getenv("ASHES_SHOPIFY_CLIENT_ID") or "").strip()
-    expected_shop = (os.getenv("SHOPIFY_SHOP") or "ashes-stack.myshopify.com").strip().lower()
     if not secret or not client_id:
         raise HTTPException(status_code=500, detail="Shopify session-token verification is not configured")
 
@@ -58,31 +71,44 @@ def verify_shopify_session_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Shopify session token is not active yet")
 
     aud = payload.get("aud")
-    if isinstance(aud, list):
-        valid_aud = client_id in aud
-    else:
-        valid_aud = str(aud or "") == client_id
+    valid_aud = client_id in aud if isinstance(aud, list) else str(aud or "") == client_id
     if not valid_aud:
         raise HTTPException(status_code=401, detail="Shopify session token audience mismatch")
 
     dest = str(payload.get("dest") or "")
-    host = (urlparse(dest).hostname or "").lower()
-    if host != expected_shop:
+    issuer = str(payload.get("iss") or "")
+    dest_shop = normalize_shop(urlparse(dest).hostname)
+    issuer_shop = normalize_shop(urlparse(issuer).hostname)
+    if not dest_shop or issuer_shop != dest_shop:
         raise HTTPException(status_code=401, detail="Shopify session token shop mismatch")
 
+    payload["ashes_shop"] = dest_shop
     return payload
 
 
 class ShopifySessionTokenMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if any(path.startswith(prefix) for prefix in _PROTECTED_PREFIXES):
-            auth = request.headers.get("authorization", "")
-            if not auth.lower().startswith("bearer "):
-                raise HTTPException(status_code=401, detail="Missing Shopify session token")
-            token = auth.split(" ", 1)[1].strip()
-            request.state.shopify_session = verify_shopify_session_token(token)
-        return await call_next(request)
+        if not any(path.startswith(prefix) for prefix in _PROTECTED_PREFIXES):
+            return await call_next(request)
+
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer "):
+            raise HTTPException(status_code=401, detail="Missing Shopify session token")
+
+        raw_token = auth.split(" ", 1)[1].strip()
+        payload = verify_shopify_session_token(raw_token)
+        shop = payload["ashes_shop"]
+        request.state.shopify_session = payload
+        request.state.shopify_shop = shop
+
+        shop_ctx = set_shop(shop)
+        token_ctx = set_id_token(raw_token)
+        try:
+            return await call_next(request)
+        finally:
+            reset_id_token(token_ctx)
+            reset_shop(shop_ctx)
 
 
 app.add_middleware(ShopifySessionTokenMiddleware)
